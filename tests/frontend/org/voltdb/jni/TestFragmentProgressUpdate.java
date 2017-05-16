@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -25,15 +25,15 @@ package org.voltdb.jni;
 
 import static org.mockito.Matchers.contains;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
 
 import java.util.Arrays;
-
-import junit.framework.TestCase;
 
 import org.mockito.Mockito;
 import org.voltcore.logging.VoltLogger;
 import org.voltdb.LegacyHashinator;
 import org.voltdb.ParameterSet;
+import org.voltdb.SQLStmt;
 import org.voltdb.TheHashinator.HashinatorConfig;
 import org.voltdb.TheHashinator.HashinatorType;
 import org.voltdb.VoltDB;
@@ -49,7 +49,8 @@ import org.voltdb.catalog.Statement;
 import org.voltdb.planner.ActivePlanRepository;
 import org.voltdb.utils.CatalogUtil;
 import org.voltdb.utils.Encoder;
-import static org.mockito.Mockito.verify;
+
+import junit.framework.TestCase;
 
 public class TestFragmentProgressUpdate extends TestCase {
 
@@ -132,8 +133,9 @@ public class TestFragmentProgressUpdate extends TestCase {
                 new long[] { CatalogUtil.getUniqueIdForFragment(selectBottomFrag) },
                 null,
                 new ParameterSet[] { params },
-                new String[] { selectStmt.getSqltext() },
-                3, 3, 2, 42, Long.MAX_VALUE);
+                null,
+                null,
+                3, 3, 2, 42, Long.MAX_VALUE, false);
         // Like many fully successful operations, a single row fetch counts as 2 logical row operations,
         // one for locating the row and one for retrieving it.
         assertEquals(1, m_ee.m_callsFromEE);
@@ -185,8 +187,9 @@ public class TestFragmentProgressUpdate extends TestCase {
                 new long[] { CatalogUtil.getUniqueIdForFragment(selectBottomFrag) },
                 null,
                 new ParameterSet[] { params },
-                new String[] { selectStmt.getSqltext() },
-                3, 3, 2, 42, Long.MAX_VALUE);
+                null,
+                null,
+                3, 3, 2, 42, Long.MAX_VALUE, false);
 
         // Like many fully successful operations, a single row fetch counts as 2 logical row operations,
         // one for locating the row and one for retrieving it.
@@ -221,8 +224,9 @@ public class TestFragmentProgressUpdate extends TestCase {
                 new long[] { CatalogUtil.getUniqueIdForFragment(deleteBottomFrag) },
                 null,
                 new ParameterSet[] { params },
-                new String[] { deleteStmt.getSqltext() },
-                3, 3, 2, 42, WRITE_TOKEN);
+                null,
+                null,
+                3, 3, 2, 42, WRITE_TOKEN, false);
 
         // populate plan cache
         ActivePlanRepository.clear();
@@ -236,8 +240,9 @@ public class TestFragmentProgressUpdate extends TestCase {
                 new long[] { CatalogUtil.getUniqueIdForFragment(selectBottomFrag) },
                 null,
                 new ParameterSet[] { params },
-                new String[] { selectStmt.getSqltext() },
-                3, 3, 2, 42, Long.MAX_VALUE);
+                null,
+                null,
+                3, 3, 2, 42, Long.MAX_VALUE, false);
         assertTrue(m_ee.m_callsFromEE > 2);
         // here the m_lastTuplesAccessed is just the same as threshold, since we start a new fragment
         assertEquals(longOpthreshold, m_ee.m_lastTuplesAccessed);
@@ -291,8 +296,9 @@ public class TestFragmentProgressUpdate extends TestCase {
                 new long[] { CatalogUtil.getUniqueIdForFragment(selectBottomFrag) },
                 null,
                 new ParameterSet[] { params },
-                new String[] { selectStmt.getSqltext() },
-                3, 3, 2, 42, READ_ONLY_TOKEN);
+                null,
+                null,
+                3, 3, 2, 42, READ_ONLY_TOKEN, false);
 
         // If want to see the stats, please uncomment the following line.
         // It is '8 393216 262144' on my machine.
@@ -463,14 +469,22 @@ public class TestFragmentProgressUpdate extends TestCase {
                 fail("Invalid value for sqlTextExpectation");
             }
 
+            SQLStmt[] stmts = null;
+            if (sqlTexts != null) {
+                stmts = new SQLStmt[sqlTexts.length];
+                for (int i = 0; i < sqlTexts.length; i++) {
+                    stmts[i] = new SQLStmt(sqlTexts[i]);
+                }
+            }
             m_ee.executePlanFragments(
                     numFragsToExecute,
                     fragIds,
                     null,
                     paramSets,
-                    sqlTexts,
+                    null,
+                    stmts,
                     3, 3, 2, 42,
-                    readOnly ? READ_ONLY_TOKEN : WRITE_TOKEN);
+                    readOnly ? READ_ONLY_TOKEN : WRITE_TOKEN, false);
             if (readOnly && timeout > 0) {
                 // only time out read queries
                 fail();
@@ -493,7 +507,7 @@ public class TestFragmentProgressUpdate extends TestCase {
             break;
         case STATEMENT_LIST:
             expectedSqlTextMsg = "Unable to report specific SQL statement text "
-                    + "for fragment task message index " + (numFragsToExecute - 1) + ".  "
+                    + "for fragment task message index " + (numFragsToExecute - 1) + ". "
                     + "It MAY be one of these " + (numFragsToExecute - 1) + " items: "
                     + "\"SELECT W_ID FROM WAREHOUSE LIMIT 1;\", ";
             break;

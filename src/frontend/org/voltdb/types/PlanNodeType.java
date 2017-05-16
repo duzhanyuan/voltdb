@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -36,15 +36,16 @@ import org.voltdb.plannodes.NestLoopIndexPlanNode;
 import org.voltdb.plannodes.NestLoopPlanNode;
 import org.voltdb.plannodes.OrderByPlanNode;
 import org.voltdb.plannodes.PartialAggregatePlanNode;
-import org.voltdb.plannodes.PartitionByPlanNode;
 import org.voltdb.plannodes.ProjectionPlanNode;
 import org.voltdb.plannodes.ReceivePlanNode;
 import org.voltdb.plannodes.SendPlanNode;
 import org.voltdb.plannodes.SeqScanPlanNode;
+import org.voltdb.plannodes.SwapTablesPlanNode;
 import org.voltdb.plannodes.TableCountPlanNode;
 import org.voltdb.plannodes.TupleScanPlanNode;
 import org.voltdb.plannodes.UnionPlanNode;
 import org.voltdb.plannodes.UpdatePlanNode;
+import org.voltdb.plannodes.WindowFunctionPlanNode;
 
 /**
  *
@@ -74,6 +75,8 @@ public enum PlanNodeType {
     UPDATE          (30, UpdatePlanNode.class),
     INSERT          (31, InsertPlanNode.class),
     DELETE          (32, DeletePlanNode.class),
+    // UPSERT       (33, UpsertPlanNode.class),// UNUSED: Upserts are inserts.
+    SWAPTABLES      (34, SwapTablesPlanNode.class),
 
     //
     // Communication Nodes
@@ -93,7 +96,7 @@ public enum PlanNodeType {
     MATERIALIZE     (55, MaterializePlanNode.class),
     LIMIT           (56, LimitPlanNode.class),
     PARTIALAGGREGATE(57, PartialAggregatePlanNode.class),
-    PARTITIONBY     (58, PartitionByPlanNode.class),
+    WINDOWFUNCTION  (58, WindowFunctionPlanNode.class),
     ;
 
     private final int val;
@@ -112,8 +115,8 @@ public enum PlanNodeType {
         return planNodeClass;
     }
 
-    protected static final Map<Integer, PlanNodeType> idx_lookup = new HashMap<Integer, PlanNodeType>();
-    protected static final Map<String, PlanNodeType> name_lookup = new HashMap<String, PlanNodeType>();
+    protected static final Map<Integer, PlanNodeType> idx_lookup = new HashMap<>();
+    protected static final Map<String, PlanNodeType> name_lookup = new HashMap<>();
     static {
         for (PlanNodeType vt : EnumSet.allOf(PlanNodeType.class)) {
             PlanNodeType.idx_lookup.put(vt.val, vt);

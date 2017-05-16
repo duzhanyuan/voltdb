@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -38,6 +38,7 @@ import org.voltdb.rejoin.TaskLog;
 import org.voltdb.utils.LogKeys;
 
 import com.google_voltpatches.common.collect.Maps;
+import org.voltdb.utils.VoltTrace;
 
 /**
  * Implements the Multi-partition procedure ProcedureTask.
@@ -102,6 +103,15 @@ public class MpProcedureTask extends ProcedureTask
     @Override
     public void run(SiteProcedureConnection siteConnection)
     {
+        final String threadName = Thread.currentThread().getName(); // Thread name has to be materialized here
+        final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.MPSITE);
+        if (traceLog != null) {
+            traceLog.add(() -> VoltTrace.meta("thread_name", "name", threadName))
+                    .add(() -> VoltTrace.meta("thread_sort_index", "sort_index", Integer.toString(1000)))
+                    .add(() -> VoltTrace.beginDuration("mpinittask",
+                                                       "txnId", TxnEgo.txnIdToString(getTxnId())));
+        }
+
         hostLog.debug("STARTING: " + this);
         // Cast up. Could avoid ugliness with Iv2TransactionClass baseclass
         MpTransactionState txn = (MpTransactionState)m_txnState;
@@ -152,7 +162,6 @@ public class MpProcedureTask extends ProcedureTask
                     m_msg.isForReplay());
 
             restart.setTruncationHandle(m_msg.getTruncationHandle());
-            restart.setOriginalTxnId(m_msg.getOriginalTxnId());
             m_initiator.send(com.google_voltpatches.common.primitives.Longs.toArray(m_initiatorHSIds), restart);
         }
         final InitiateResponseMessage response = processInitiateTask(txn.m_initiationMsg, siteConnection);
@@ -180,6 +189,10 @@ public class MpProcedureTask extends ProcedureTask
             restartTransaction();
             hostLog.debug("RESTART: " + this);
         }
+
+        if (traceLog != null) {
+            traceLog.add(VoltTrace::endDuration);
+        }
     }
 
     @Override
@@ -198,6 +211,14 @@ public class MpProcedureTask extends ProcedureTask
     @Override
     void completeInitiateTask(SiteProcedureConnection siteConnection)
     {
+        final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.MPSITE);
+        if (traceLog != null) {
+            traceLog.add(() -> VoltTrace.instant("sendcomplete",
+                                                 "txnId", TxnEgo.txnIdToString(getTxnId()),
+                                                 "commit", Boolean.toString(!m_txnState.needsRollback()),
+                                                 "dest", CoreUtils.hsIdCollectionToString(m_initiatorHSIds)));
+        }
+
         CompleteTransactionMessage complete = new CompleteTransactionMessage(
                 m_initiator.getHSId(), // who is the "initiator" now??
                 m_initiator.getHSId(),
@@ -210,7 +231,6 @@ public class MpProcedureTask extends ProcedureTask
                 m_msg.isForReplay());
 
         complete.setTruncationHandle(m_msg.getTruncationHandle());
-        complete.setOriginalTxnId(m_msg.getOriginalTxnId());
         m_initiator.send(com.google_voltpatches.common.primitives.Longs.toArray(m_initiatorHSIds), complete);
         m_txnState.setDone();
         m_queue.flush(getTxnId());

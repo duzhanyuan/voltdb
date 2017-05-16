@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -64,6 +64,14 @@ public class SQLStmt {
 
     boolean inCatalog;
 
+    String stmtName = null;
+    protected void setStmtName(String name) {
+        stmtName = name;
+    }
+    protected String getStmtName() {
+        return stmtName;
+    }
+
     // used to clean up plans
     SiteProcedureConnection site;
 
@@ -85,7 +93,7 @@ public class SQLStmt {
      * @param joinOrder separated list of tables used by the query specifying the order they should be joined in
      */
     public SQLStmt(String sqlText, String joinOrder) {
-        this(sqlText.getBytes(Constants.UTF8ENCODING), joinOrder);
+        this(canonicalizeStmt(sqlText).getBytes(Constants.UTF8ENCODING), joinOrder);
     }
 
     /**
@@ -205,4 +213,29 @@ public class SQLStmt {
     public String getJoinOrder() {
         return joinOrder;
     }
+
+    /**
+     * Is this a read only statement?
+     *
+     * @return true if it's read only, false otherwise
+     */
+    public boolean isReadOnly() {
+        return isReadOnly;
+    }
+
+    // In SQL statement the input without ending with a semicolon is legitimate,
+    // however in order to do a reverse look up (crc -> sql str), we'd like to
+    // use the same statement to compute crc.
+    private static String canonicalizeStmt(String stmtStr) {
+        // Cleanup whitespace newlines and adding semicolon for catalog compatibility
+        stmtStr = stmtStr.replaceAll("\n", " ");
+        stmtStr = stmtStr.trim();
+
+        if (!stmtStr.endsWith(";")) {
+            stmtStr += ";";
+        }
+        return stmtStr;
+    }
+
+
 }

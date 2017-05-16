@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -20,7 +20,6 @@ package org.voltdb.sysprocs;
 import java.util.List;
 import java.util.Map;
 
-import org.voltcore.logging.VoltLogger;
 import org.voltdb.DependencyPair;
 import org.voltdb.ParameterSet;
 import org.voltdb.ProcInfo;
@@ -44,12 +43,10 @@ public class Quiesce extends VoltSystemProcedure {
 
     static final int DEP_SITES = (int) SysProcFragmentId.PF_quiesce_sites | DtxnConstants.MULTIPARTITION_DEPENDENCY;
     static final int DEP_PROCESSED_SITES = (int) SysProcFragmentId.PF_quiesce_processed_sites;
-    private static final VoltLogger HOST_LOG = new VoltLogger("HOST");
 
     @Override
-    public void init() {
-        registerPlanFragment(SysProcFragmentId.PF_quiesce_sites);
-        registerPlanFragment(SysProcFragmentId.PF_quiesce_processed_sites);
+    public long[] getPlanFragmentIds() {
+        return new long[]{SysProcFragmentId.PF_quiesce_sites, SysProcFragmentId.PF_quiesce_processed_sites};
     }
 
     @Override
@@ -62,12 +59,12 @@ public class Quiesce extends VoltSystemProcedure {
                 context.getSiteProcedureConnection().quiesce();
                 VoltTable results = new VoltTable(new ColumnInfo("id", VoltType.BIGINT));
                 results.addRow(context.getSiteId());
-                return new DependencyPair(DEP_SITES, results);
+                return new DependencyPair.TableDependencyPair(DEP_SITES, results);
             }
             else if (fragmentId == SysProcFragmentId.PF_quiesce_processed_sites) {
                 VoltTable dummy = new VoltTable(VoltSystemProcedure.STATUS_SCHEMA);
                 dummy.addRow(VoltSystemProcedure.STATUS_OK);
-                return new DependencyPair(DEP_PROCESSED_SITES, dummy);
+                return new DependencyPair.TableDependencyPair(DEP_PROCESSED_SITES, dummy);
             }
         }
         catch (Exception ex) {

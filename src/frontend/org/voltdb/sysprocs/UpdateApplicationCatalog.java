@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,12 +17,12 @@
 
 package org.voltdb.sysprocs;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.SortedSet;
-import java.util.TreeSet;
+import java.util.TreeMap;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.zookeeper_voltpatches.ZooKeeper;
@@ -35,6 +35,7 @@ import org.voltdb.DependencyPair;
 import org.voltdb.DeprecatedProcedureAPIAccess;
 import org.voltdb.ParameterSet;
 import org.voltdb.ProcInfo;
+import org.voltdb.ReplicationRole;
 import org.voltdb.StatsSelector;
 import org.voltdb.SystemProcedureExecutionContext;
 import org.voltdb.VoltDB;
@@ -73,11 +74,12 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
             SysProcFragmentId.PF_updateCatalogAggregate;
 
     @Override
-    public void init() {
-        registerPlanFragment(SysProcFragmentId.PF_updateCatalogPrecheckAndSync);
-        registerPlanFragment(SysProcFragmentId.PF_updateCatalogPrecheckAndSyncAggregate);
-        registerPlanFragment(SysProcFragmentId.PF_updateCatalog);
-        registerPlanFragment(SysProcFragmentId.PF_updateCatalogAggregate);
+    public long[] getPlanFragmentIds() {
+        return new long[]{
+            SysProcFragmentId.PF_updateCatalogPrecheckAndSync,
+            SysProcFragmentId.PF_updateCatalogPrecheckAndSyncAggregate,
+            SysProcFragmentId.PF_updateCatalog,
+            SysProcFragmentId.PF_updateCatalogAggregate};
     }
 
     /**
@@ -87,7 +89,13 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
      * return the pre-provided error message that corresponds to the non-empty
      * tables.
      *
-     * @param tablesThatMustBeEmpty List of table names that must be empty.
+     * Each of the tablesThatMustBeEmpty strings represents a set of tables.
+     * This is is a sequence of names separated by plus signs (+).  For example,
+     * "A+B+C" is the set {A, B, C}, and "A" is the singleton set {A}.  In
+     * these sets, only one needs to be empty.
+     *
+     * @param tablesThatMustBeEmpty List of sets of table names that must include
+     *                              an empty table.
      * @param reasonsForEmptyTables Error messages to return if that table isn't
      * empty.
      * @param context
@@ -107,9 +115,11 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
         // fetch the id of the tables that must be empty from the
         //  current catalog (not the new one).
         CatalogMap<Table> tables = context.getDatabase().getTables();
-        int[] tableIds = new int[tablesThatMustBeEmpty.length];
+        List<List<String>> allTableSets = decodeTables(tablesThatMustBeEmpty);
+        Map<String, Boolean> allTables = collapseSets(allTableSets);
+        int[] tableIds = new int[allTables.size()];
         int i = 0;
-        for (String tableName : tablesThatMustBeEmpty) {
+        for (String tableName : allTables.keySet()) {
             Table table = tables.get(tableName);
             if (table == null) {
                 String msg = String.format("@UpdateApplicationCatalog was checking to see if table %s was empty, " +
@@ -134,28 +144,80 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
             throw new SpecifiedException(ClientResponse.UNEXPECTED_FAILURE, msg);
         }
         VoltTable stats = s1[0];
-        SortedSet<String> nonEmptyTables = new TreeSet<>();
 
-        // find all empty tables
+        // find all empty tables and mark that they are empty.
         while (stats.advanceRow()) {
             long tupleCount = stats.getLong("TUPLE_COUNT");
             String tableName = stats.getString("TABLE_NAME");
+            boolean isEmpty = true;
             if (tupleCount > 0 && !"StreamedTable".equals(stats.getString("TABLE_TYPE"))) {
-                nonEmptyTables.add(tableName);
+                isEmpty = false;
             }
+            allTables.put(tableName.toUpperCase(), isEmpty);
         }
 
-        // return an error containing the names of all non-empty tables
-        // via the propagated reasons why each needs to be empty
-        if (!nonEmptyTables.isEmpty()) {
-            String msg = "Unable to make requested schema change:\n";
-            for (i = 0; i < tablesThatMustBeEmpty.length; ++i) {
-                if (nonEmptyTables.contains(tablesThatMustBeEmpty[i])) {
-                    msg += reasonsForEmptyTables[i] + "\n";
+        // Reexamine the sets of sets and see if any of them has
+        // one empty element.  If not, then add the respective
+        // error message to the output message
+        String msg = "Unable to make requested schema change:\n";
+        boolean allOk = true;
+        for (int idx = 0; idx < allTableSets.size(); idx += 1) {
+            List<String> tableNames = allTableSets.get(idx);
+            boolean allNonEmpty = true;
+            for (String tableName : tableNames) {
+                Boolean oneEmpty = allTables.get(tableName);
+                if (oneEmpty != null && oneEmpty) {
+                    allNonEmpty = false;
+                    break;
                 }
             }
+            if (allNonEmpty) {
+                String errMsg = reasonsForEmptyTables[idx];
+                msg += errMsg + "\n";
+                allOk = false;
+            }
+        }
+        if ( ! allOk) {
             throw new SpecifiedException(ClientResponse.GRACEFUL_FAILURE, msg);
         }
+    }
+
+    /**
+     * Take a list of list of table names and collapse into a map
+     * which maps all table names to false.  We will set the correct
+     * values later on.  We just want to get the structure right now.
+     * Note that tables may be named multiple time in the lists of
+     * lists of tables.  Everything gets mapped to false, so we don't
+     * care.
+     *
+     * @param allTableSets
+     * @return
+     */
+    private Map<String, Boolean> collapseSets(List<List<String>> allTableSets) {
+        Map<String, Boolean> answer = new TreeMap<>();
+        for (List<String> tables : allTableSets) {
+            for (String table : tables) {
+                answer.put(table, false);
+            }
+        }
+        return answer;
+    }
+
+    /**
+     * Decode sets of names encoded as by concatenation with plus signs
+     * into lists of lists of strings.  Preserve the order, since we need
+     * it to match to error messages later on.
+     *
+     * @param tablesThatMustBeEmpty
+     * @return The decoded lists.
+     */
+    private List<List<String>> decodeTables(String[] tablesThatMustBeEmpty) {
+        List<List<String>> answer = new ArrayList<>();
+        for (String tableSet : tablesThatMustBeEmpty) {
+            String tableNames[] = tableSet.split("\\+");
+            answer.add(Arrays.asList(tableNames));
+        }
+        return answer;
     }
 
     public static class JavaClassForTest {
@@ -192,7 +254,7 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
 
             // Don't actually care about the returned table, just need to send something
             // back to the MPI scoreboard
-            DependencyPair success = new DependencyPair(DEP_updateCatalogSync,
+            DependencyPair success = new DependencyPair.TableDependencyPair(DEP_updateCatalogSync,
                     new VoltTable(new ColumnInfo[] { new ColumnInfo("UNUSED", VoltType.BIGINT) } ));
 
             if ( ! context.isLowestSiteId()) {
@@ -267,7 +329,7 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
             // back to the MPI scoreboard
             log.info("Site " + CoreUtils.hsIdToString(m_site.getCorrespondingSiteId()) +
                     " acknowledged data and catalog prechecks.");
-            return new DependencyPair(DEP_updateCatalogSyncAggregate,
+            return new DependencyPair.TableDependencyPair(DEP_updateCatalogSyncAggregate,
                     new VoltTable(new ColumnInfo[] { new ColumnInfo("UNUSED", VoltType.BIGINT) } ));
         }
         else if (fragmentId == SysProcFragmentId.PF_updateCatalog) {
@@ -275,6 +337,9 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
             String commands = Encoder.decodeBase64AndDecompress(catalogDiffCommands);
             int expectedCatalogVersion = (Integer)params.toArray()[1];
             boolean requiresSnapshotIsolation = ((Byte) params.toArray()[2]) != 0;
+            boolean requireCatalogDiffCmdsApplyToEE = ((Byte) params.toArray()[3]) != 0;
+            boolean hasSchemaChange = ((Byte) params.toArray()[4]) != 0;
+            boolean requiresNewExportGeneration = ((Byte) params.toArray()[5]) != 0;
 
             CatalogAndIds catalogStuff = null;
             try {
@@ -299,13 +364,24 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
                         DeprecatedProcedureAPIAccess.getVoltPrivateRealTransactionId(this),
                         getUniqueId(),
                         catalogStuff.deploymentBytes,
-                        catalogStuff.getDeploymentHash());
+                        catalogStuff.getDeploymentHash(),
+                        requireCatalogDiffCmdsApplyToEE,
+                        hasSchemaChange,
+                        requiresNewExportGeneration);
+
+                // If the cluster is in master role only (not replica or XDCR), reset trackers.
+                // The producer would have been turned off by the code above already.
+                if (VoltDB.instance().getReplicationRole() == ReplicationRole.NONE &&
+                    !VoltDB.instance().getReplicationActive()) {
+                    context.resetDrAppliedTracker();
+                }
 
                 // update the local catalog.  Safe to do this thanks to the check to get into here.
                 long uniqueId = m_runner.getUniqueId();
                 long spHandle = m_runner.getTxnState().getNotice().getSpHandle();
                 context.updateCatalog(commands, p.getFirst(), p.getSecond(),
-                        requiresSnapshotIsolation, uniqueId, spHandle);
+                        requiresSnapshotIsolation, uniqueId, spHandle,
+                        requireCatalogDiffCmdsApplyToEE, requiresNewExportGeneration);
 
                 if (log.isDebugEnabled()) {
                     log.debug(String.format("Site %s completed catalog update with catalog hash %s, deployment hash %s%s.",
@@ -331,11 +407,11 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
 
             VoltTable result = new VoltTable(VoltSystemProcedure.STATUS_SCHEMA);
             result.addRow(VoltSystemProcedure.STATUS_OK);
-            return new DependencyPair(DEP_updateCatalog, result);
+            return new DependencyPair.TableDependencyPair(DEP_updateCatalog, result);
         }
         else if (fragmentId == SysProcFragmentId.PF_updateCatalogAggregate) {
             VoltTable result = VoltTableUtil.unionTables(dependencies.get(DEP_updateCatalog));
-            return new DependencyPair(DEP_updateCatalogAggregate, result);
+            return new DependencyPair.TableDependencyPair(DEP_updateCatalogAggregate, result);
         }
         else {
             VoltDB.crashLocalVoltDB(
@@ -347,7 +423,6 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
     }
 
     private final void performCatalogVerifyWork(
-            String catalogDiffCommands,
             int expectedCatalogVersion,
             String[] tablesThatMustBeEmpty,
             String[] reasonsForEmptyTables,
@@ -378,7 +453,9 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
     private final VoltTable[] performCatalogUpdateWork(
             String catalogDiffCommands,
             int expectedCatalogVersion,
-            byte requiresSnapshotIsolation)
+            byte requiresSnapshotIsolation,
+            byte requireCatalogDiffCmdsApplyToEE,
+            byte hasSchemaChange, byte requiresNewExportGeneration)
     {
         SynthesizedPlanFragment[] pfs = new SynthesizedPlanFragment[2];
 
@@ -388,7 +465,8 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
         pfs[0].outputDepId = DEP_updateCatalog;
         pfs[0].multipartition = true;
         pfs[0].parameters = ParameterSet.fromArrayNoCopy(
-                catalogDiffCommands, expectedCatalogVersion, requiresSnapshotIsolation);
+                catalogDiffCommands, expectedCatalogVersion, requiresSnapshotIsolation,
+                requireCatalogDiffCmdsApplyToEE, hasSchemaChange, requiresNewExportGeneration);
 
         pfs[1] = new SynthesizedPlanFragment();
         pfs[1].fragmentId = SysProcFragmentId.PF_updateCatalogAggregate;
@@ -423,7 +501,10 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
                            String[] reasonsForEmptyTables,
                            byte requiresSnapshotIsolation,
                            byte worksWithElastic,
-                           byte[] deploymentHash)
+                           byte[] deploymentHash,
+                           byte requireCatalogDiffCmdsApplyToEE,
+                           byte hasSchemaChange,
+                           byte requiresNewExportGeneration)
                                    throws Exception
     {
         assert(tablesThatMustBeEmpty != null);
@@ -488,7 +569,6 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
 
         try {
             performCatalogVerifyWork(
-                    catalogDiffCommands,
                     expectedCatalogVersion,
                     tablesThatMustBeEmpty,
                     reasonsForEmptyTables,
@@ -520,7 +600,15 @@ public class UpdateApplicationCatalog extends VoltSystemProcedure {
         performCatalogUpdateWork(
                 catalogDiffCommands,
                 expectedCatalogVersion,
-                requiresSnapshotIsolation);
+                requiresSnapshotIsolation,
+                requireCatalogDiffCmdsApplyToEE,
+                hasSchemaChange, requiresNewExportGeneration);
+
+        // This is when the UpdateApplicationCatalog really ends in the blocking path
+        log.info(String.format("Globally updating the current application catalog and deployment " +
+                "(new hashes %s, %s).",
+            Encoder.hexEncode(catalogHash).substring(0, 10),
+            Encoder.hexEncode(deploymentHash).substring(0, 10)));
 
         VoltTable result = new VoltTable(VoltSystemProcedure.STATUS_SCHEMA);
         result.addRow(VoltSystemProcedure.STATUS_OK);

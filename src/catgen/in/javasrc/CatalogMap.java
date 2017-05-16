@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -23,6 +23,7 @@ package org.voltdb.catalog;
 
 import java.util.Iterator;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -188,10 +189,10 @@ public final class CatalogMap<T extends CatalogType> implements Iterable<T> {
         }
     }
 
-    void writeCommandsForMembers(StringBuilder sb) {
+    void writeCommandsForMembers(StringBuilder sb, Set<String> whiteListFields) {
         for (T type : this) {
             type.writeCreationCommand(sb);
-            type.writeFieldCommands(sb);
+            type.writeFieldCommands(sb, whiteListFields);
             type.writeChildCommands(sb);
         }
     }

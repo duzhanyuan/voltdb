@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -23,8 +23,6 @@ import java.io.StringWriter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.AsynchronousCloseException;
-import java.nio.channels.SelectionKey;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
@@ -32,6 +30,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -47,16 +46,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+
 import org.HdrHistogram_voltpatches.AbstractHistogram;
 import org.apache.zookeeper_voltpatches.ZooKeeper;
 import org.json_voltpatches.JSONObject;
+import org.voltcore.logging.Level;
 import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.BinaryPayloadMessage;
 import org.voltcore.messaging.HostMessenger;
 import org.voltcore.messaging.Mailbox;
 import org.voltcore.messaging.VoltMessage;
+import org.voltcore.network.CipherExecutor;
 import org.voltcore.network.Connection;
-import org.voltcore.network.InputHandler;
 import org.voltcore.network.NIOReadStream;
 import org.voltcore.network.QueueMonitor;
 import org.voltcore.network.ReverseDNSPolicy;
@@ -68,6 +71,9 @@ import org.voltcore.utils.CoreUtils;
 import org.voltcore.utils.DeferredSerialization;
 import org.voltcore.utils.EstTime;
 import org.voltcore.utils.Pair;
+import org.voltcore.utils.RateLimitedLogger;
+import org.voltcore.utils.ssl.MessagingChannel;
+import org.voltcore.utils.ssl.SSLConfiguration;
 import org.voltdb.AuthSystem.AuthProvider;
 import org.voltdb.AuthSystem.AuthUser;
 import org.voltdb.CatalogContext.ProcedurePartitionInfo;
@@ -77,11 +83,12 @@ import org.voltdb.catalog.Procedure;
 import org.voltdb.catalog.SnapshotSchedule;
 import org.voltdb.client.ClientAuthScheme;
 import org.voltdb.client.ClientResponse;
+import org.voltdb.client.ProcedureCallback;
+import org.voltdb.client.TLSHandshaker;
 import org.voltdb.common.Constants;
 import org.voltdb.dtxn.InitiatorStats.InvocationInfo;
 import org.voltdb.iv2.Cartographer;
 import org.voltdb.iv2.Iv2Trace;
-import org.voltdb.iv2.MpInitiator;
 import org.voltdb.messaging.FastDeserializer;
 import org.voltdb.messaging.InitiateResponseMessage;
 import org.voltdb.messaging.Iv2EndOfLogMessage;
@@ -89,11 +96,14 @@ import org.voltdb.messaging.Iv2InitiateTaskMessage;
 import org.voltdb.messaging.LocalMailbox;
 import org.voltdb.security.AuthenticationRequest;
 import org.voltdb.utils.MiscUtils;
+import org.voltdb.utils.VoltTrace;
 
 import com.google_voltpatches.common.base.Charsets;
 import com.google_voltpatches.common.base.Predicate;
 import com.google_voltpatches.common.base.Supplier;
 import com.google_voltpatches.common.base.Throwables;
+import com.google_voltpatches.common.collect.ImmutableSet;
+import com.google_voltpatches.common.collect.Sets;
 import com.google_voltpatches.common.util.concurrent.ListenableFuture;
 
 /**
@@ -109,6 +119,8 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
 
     //Same as in Distributer.java
     public static final long ASYNC_TOPO_HANDLE = Long.MAX_VALUE - 1;
+    //Notify clients to update procedure info cache for client affinity
+    public static final long ASYNC_PROC_HANDLE = Long.MAX_VALUE - 2;
 
     // reasons a connection can fail
     public static final byte AUTHENTICATION_FAILURE = Constants.AUTHENTICATION_FAILURE;
@@ -128,20 +140,28 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
     public static final long SNAPSHOT_UTIL_CID          = Long.MIN_VALUE + 2;
     public static final long ELASTIC_JOIN_CID           = Long.MIN_VALUE + 3;
     // public static final long UNUSED_CID (was DR)     = Long.MIN_VALUE + 4;
-    public static final long INTERNAL_CID               = Long.MIN_VALUE + 5;
+    // public static final long UNUSED_CID              = Long.MIN_VALUE + 5;
     public static final long EXECUTE_TASK_CID           = Long.MIN_VALUE + 6;
     public static final long DR_DISPATCHER_CID          = Long.MIN_VALUE + 7;
+    public static final long RESTORE_SCHEMAS_CID        = Long.MIN_VALUE + 8;
+    public static final long SHUTDONW_SAVE_CID          = Long.MIN_VALUE + 9;
+    public static final long NT_REMOTE_PROC_CID         = Long.MIN_VALUE + 10;
+
     // Leave CL_REPLAY_BASE_CID at the end, it uses this as a base and generates more cids
     // PerPartition cids
     private static long setBaseValue(int offset) { return offset << 14; }
-    public static final long CL_REPLAY_BASE_CID         = Long.MIN_VALUE + setBaseValue(1);
+    public static final long CL_REPLAY_BASE_CID                = Long.MIN_VALUE + setBaseValue(1);
     public static final long DR_REPLICATION_SNAPSHOT_BASE_CID  = Long.MIN_VALUE + setBaseValue(2);
     public static final long DR_REPLICATION_NORMAL_BASE_CID    = Long.MIN_VALUE + setBaseValue(3);
+    public static final long DR_REPLICATION_MP_BASE_CID        = Long.MIN_VALUE + setBaseValue(4);
+    public static final long INTERNAL_CID                      = Long.MIN_VALUE + setBaseValue(5);
 
     private static final VoltLogger log = new VoltLogger(ClientInterface.class.getName());
     private static final VoltLogger authLog = new VoltLogger("AUTH");
     private static final VoltLogger hostLog = new VoltLogger("HOST");
     private static final VoltLogger networkLog = new VoltLogger("NETWORK");
+    private static final RateLimitedLogger m_rateLimitedLogger =  new RateLimitedLogger(TimeUnit.MINUTES.toMillis(60), authLog, Level.WARN);
+
 
     /** Ad hoc async work is either regular planning, ad hoc explain, or default proc explain. */
     public enum ExplainMode {
@@ -181,7 +201,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
 
     private final Cartographer m_cartographer;
 
-    //Dispatched strore procedure invocations
+    //Dispatched stored procedure invocations
     private final InvocationDispatcher m_dispatcher;
 
     /*
@@ -243,6 +263,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         private Thread m_thread = null;
         private final boolean m_isAdmin;
         private final InetAddress m_interface;
+        private final SSLContext m_sslContext;
 
         /**
          * Used a cached thread pool to accept new connections.
@@ -250,7 +271,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         private final ExecutorService m_executor = CoreUtils.getBoundedThreadPoolExecutor(128, 10L, TimeUnit.SECONDS,
                         CoreUtils.getThreadFactory("Client authentication threads", "Client authenticator"));
 
-        ClientAcceptor(InetAddress intf, int port, VoltNetworkPool network, boolean isAdmin)
+        ClientAcceptor(InetAddress intf, int port, VoltNetworkPool network, boolean isAdmin, SSLContext sslContext)
         {
             m_interface = intf;
             m_network = network;
@@ -271,6 +292,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                 throw new RuntimeException(e);
             }
             m_serverSocket = socket;
+            m_sslContext = sslContext;
         }
 
         public void start() throws IOException {
@@ -321,35 +343,124 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
             @Override
             public void run() {
                 if (m_socket != null) {
-                    boolean success = false;
-                    //Populated on timeout
-                    AtomicReference<String> timeoutRef = new AtomicReference<String>();
-                    try {
-                        final InputHandler handler = authenticate(m_socket, timeoutRef);
-                        if (handler != null) {
-                            m_socket.configureBlocking(false);
-                            if (handler instanceof ClientInputHandler) {
-                                m_socket.socket().setTcpNoDelay(true);
-                            }
-                            m_socket.socket().setKeepAlive(true);
 
-                            if (handler instanceof ClientInputHandler) {
-                                m_network.registerChannel(
-                                                m_socket,
-                                                handler,
-                                                0,
-                                                ReverseDNSPolicy.ASYNCHRONOUS);
-                                /*
-                                 * If IV2 is enabled the logic initially enabling read is
-                                 * in the started method of the InputHandler
-                                 */
-                            } else {
-                                m_network.registerChannel(
-                                        m_socket,
-                                        handler,
-                                        SelectionKey.OP_READ,
-                                        ReverseDNSPolicy.ASYNCHRONOUS);
+                    SSLEngine sslEngine = null;
+                    ByteBuffer remnant = ByteBuffer.wrap(new byte[0]);
+
+                    if (m_sslContext != null) {
+                        try {
+                            sslEngine = m_sslContext.createSSLEngine();
+                        } catch (Exception e) {
+                            networkLog.warn("Rejected accepting new connection, failed to create SSLEngine; " +
+                                    "indicates problem with SSL configuration: " + e.getMessage());
+                            return;
+                        }
+                        sslEngine.setUseClientMode(false);
+                        sslEngine.setNeedClientAuth(false);
+
+                        Set<String> enabled = ImmutableSet.copyOf(sslEngine.getEnabledCipherSuites());
+                        Set<String> intersection = Sets.intersection(SSLConfiguration.PREFERRED_CIPHERS, enabled);
+                        if (intersection.isEmpty()) {
+                            hostLog.warn("Preferred cipher suites are not available");
+                            intersection = enabled;
+                        }
+                        sslEngine.setEnabledCipherSuites(intersection.toArray(new String[0]));
+                        // blocking needs to be false for handshaking.
+                        boolean handshakeStatus;
+
+                        try {
+                            // m_socket.configureBlocking(false);
+                            m_socket.socket().setTcpNoDelay(true);
+                            TLSHandshaker handshaker = new TLSHandshaker(m_socket, sslEngine);
+                            handshakeStatus = handshaker.handshake();
+                            /*
+                             * The JDK caches SSL sessions when the participants are the same (i.e.
+                             * multiple connection requests from the same peer). Once a session is cached
+                             * the client side ends its handshake session quickly, and is able to send
+                             * the login Volt message before the server finishes its handshake. This message
+                             * is caught in the servers last handshake network read.
+                             */
+                            remnant = handshaker.getRemnant();
+
+                        } catch (IOException e) {
+                            try {
+                                m_socket.close();
+                            } catch (IOException e1) {
+                                hostLog.warn("failed to close channel",e1);
                             }
+                            networkLog.warn("Rejected accepting new connection, SSL handshake failed: " + e.getMessage(), e);
+                            return;
+                        }
+                        if (!handshakeStatus) {
+                            try {
+                                m_socket.close();
+                            } catch (IOException e) {
+                            }
+                            networkLog.warn("Rejected accepting new connection, SSL handshake failed.");
+                            return;
+                        }
+                        networkLog.info("SSL enabled on connection " + m_socket.socket().getRemoteSocketAddress() +
+                                " with protocol " + sslEngine.getSession().getProtocol() + " and with cipher " + sslEngine.getSession().getCipherSuite());
+                    }
+
+                    boolean success = false;
+                    MessagingChannel messagingChannel = MessagingChannel.get(m_socket, sslEngine);
+                    AtomicReference<String> timeoutRef = null;
+                    try {
+
+                    /*
+                     * Enforce a limit on the maximum number of connections
+                     */
+                        if (m_numConnections.get() >= MAX_CONNECTIONS.get()) {
+                            networkLog.warn("Rejected connection from " +
+                                    m_socket.socket().getRemoteSocketAddress() +
+                                    " because the connection limit of " + MAX_CONNECTIONS + " has been reached");
+                            try {
+                            /*
+                             * Send rejection message with reason code
+                             */
+                                ByteBuffer b = ByteBuffer.allocate(1);
+                                b.put(MAX_CONNECTIONS_LIMIT_ERROR);
+                                b.flip();
+                                synchronized(m_socket.blockingLock()) {
+                                    m_socket.configureBlocking(true);
+                                }
+                                for (int ii = 0; ii < 4 && b.hasRemaining(); ii++) {
+                                    messagingChannel.writeMessage(b);
+                                }
+                                m_socket.close();
+                            } catch (IOException e) {}//don't care keep running
+                            return;
+                        }
+
+                    /*
+                     * Increment the number of connections even though this one hasn't been authenticated
+                     * so that a flood of connection attempts (with many doomed) will not result in
+                     * successful authentication of connections that would put us over the limit.
+                     */
+                        m_numConnections.incrementAndGet();
+
+                        //Populated on timeout
+                        timeoutRef = new AtomicReference<String>();
+                        final ClientInputHandler handler = authenticate(m_socket, messagingChannel, timeoutRef, remnant);
+                        if (handler != null) {
+                            synchronized(m_socket.blockingLock()) {
+                                m_socket.configureBlocking(false);
+                                m_socket.socket().setTcpNoDelay(true);
+                                m_socket.socket().setKeepAlive(true);
+                            }
+
+                            m_network.registerChannel(
+                                    m_socket,
+                                    handler,
+                                    0,
+                                    ReverseDNSPolicy.ASYNCHRONOUS,
+                                    CipherExecutor.SERVER,
+                                    sslEngine);
+                            /*
+                             * If IV2 is enabled the logic initially enabling read is
+                             * in the started method of the InputHandler
+                             */
                             success = true;
                         }
                     } catch (Exception e) {
@@ -367,6 +478,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                             }
                         }
                     } finally {
+                        messagingChannel.cleanUp();
                         if (!success) {
                             m_numConnections.decrementAndGet();
                         }
@@ -397,36 +509,6 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                             throw ioe;
                         }
                     }
-
-                    /*
-                     * Enforce a limit on the maximum number of connections
-                     */
-                    if (m_numConnections.get() >= MAX_CONNECTIONS.get()) {
-                        networkLog.warn("Rejected connection from " +
-                                socket.socket().getRemoteSocketAddress() +
-                                " because the connection limit of " + MAX_CONNECTIONS + " has been reached");
-                        try {
-                            /*
-                             * Send rejection message with reason code
-                             */
-                            final ByteBuffer b = ByteBuffer.allocate(1);
-                            b.put(MAX_CONNECTIONS_LIMIT_ERROR);
-                            b.flip();
-                            socket.configureBlocking(true);
-                            for (int ii = 0; ii < 4 && b.hasRemaining(); ii++) {
-                                socket.write(b);
-                            }
-                            socket.close();
-                        } catch (IOException e) {}//don't care keep running
-                        continue;
-                    }
-
-                    /*
-                     * Increment the number of connections even though this one hasn't been authenticated
-                     * so that a flood of connection attempts (with many doomed) will not result in
-                     * successful authentication of connections that would put us over the limit.
-                     */
-                    m_numConnections.incrementAndGet();
 
                     final AuthRunnable authRunnable = new AuthRunnable(socket);
                     while (true) {
@@ -467,11 +549,16 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
          * Attempt to authenticate the user associated with this socket connection
          * @param socket
          * @param timeoutRef Populated with error on timeout
+         * @param remnant The JDK caches SSL sessions when the participants are the same (i.e.
+         *   multiple connection requests from the same peer). Once a session is cached
+         *   the client side ends its handshake session quickly, and is able to send
+         *   the login Volt message before the server finishes its handshake. This message
+         *   is caught in the servers last handshake network read.
          * @return AuthUser a set of user permissions or null if authentication fails
          * @throws IOException
          */
-        private InputHandler
-        authenticate(final SocketChannel socket, final AtomicReference<String> timeoutRef) throws IOException
+        private ClientInputHandler
+        authenticate(final SocketChannel socket, MessagingChannel messagingChannel, final AtomicReference<String> timeoutRef, ByteBuffer remnant) throws IOException
         {
             ByteBuffer responseBuffer = ByteBuffer.allocate(6);
             byte version = (byte)0;
@@ -482,9 +569,14 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
              * The login message is a length preceded name string followed by a length preceded
              * SHA-1 single hash of the password.
              */
-            socket.configureBlocking(true);
-            socket.socket().setTcpNoDelay(true);//Greatly speeds up requests hitting the wire
-            final ByteBuffer lengthBuffer = ByteBuffer.allocate(4);
+            synchronized (socket.blockingLock()) {
+                socket.configureBlocking(true);
+                socket.socket().setTcpNoDelay(true);//Greatly speeds up requests hitting the wire
+            }
+
+            if (remnant.hasRemaining() && remnant.remaining() <= 4 && remnant.getInt() < remnant.remaining()) {
+                throw new IOException("SSL Handshake remnant is not a valid VoltDB message: " + remnant);
+            }
 
             /*
              * Schedule a timeout to close the socket in case there is no response for the timeout
@@ -510,74 +602,22 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                         }
                     }, AUTH_TIMEOUT_MS, 0, TimeUnit.MILLISECONDS);
 
-            try {
-                while (lengthBuffer.hasRemaining()) {
-                    int read = socket.read(lengthBuffer);
-                    if (read == -1) {
-                        socket.close();
-                        timeoutFuture.cancel(false);
-                        return null;
-                    }
-                }
-            } catch (AsynchronousCloseException e) {}//This is the timeout firing and closing the channel
-
-            //Didn't get the value. Client isn't going to get anymore time.
-            if (lengthBuffer.hasRemaining()) {
-                timeoutFuture.cancel(false);
-                authLog.debug("Failure to authenticate connection(" + socket.socket().getRemoteSocketAddress() +
-                              "): wire protocol violation (timeout reading message length).");
-                //Send negative response
-                responseBuffer.put(WIRE_PROTOCOL_TIMEOUT_ERROR).flip();
-                socket.write(responseBuffer);
-                socket.close();
-                return null;
+            ByteBuffer message = remnant.hasRemaining() ? remnant : null;
+            if (message != null) {
+                byte [] todigest = new byte[message.limit()];
+                message.position(0);
+                message.get(todigest).position(4);
             }
-            lengthBuffer.flip();
-
-            final int messageLength = lengthBuffer.getInt();
-            if (messageLength < 0) {
-                timeoutFuture.cancel(false);
-                authLog.warn("Failure to authenticate connection(" + socket.socket().getRemoteSocketAddress() +
-                             "): wire protocol violation (message length " + messageLength + " is negative).");
-                //Send negative response
-                responseBuffer.put(WIRE_PROTOCOL_FORMAT_ERROR).flip();
-                socket.write(responseBuffer);
-                socket.close();
-                return null;
-            }
-            if (messageLength > ((1024 * 1024) * 2)) {
-                timeoutFuture.cancel(false);
-                authLog.warn("Failure to authenticate connection(" + socket.socket().getRemoteSocketAddress() +
-                             "): wire protocol violation (message length " + messageLength + " is too large).");
-                //Send negative response
-                responseBuffer.put(WIRE_PROTOCOL_FORMAT_ERROR).flip();
-                socket.write(responseBuffer);
-                socket.close();
-                return null;
-              }
-
-            final ByteBuffer message = ByteBuffer.allocate(messageLength);
-
             try {
-                while (message.hasRemaining()) {
-                    int read = socket.read(message);
-                    if (read == -1) {
-                        socket.close();
-                        timeoutFuture.cancel(false);
-                        return null;
-                    }
+                while (message == null) {
+                    message = messagingChannel.readMessage();
                 }
-            } catch (AsynchronousCloseException e) {}//This is the timeout firing and closing the channel
-
-            //Didn't get the whole message. Client isn't going to get anymore time.
-            if (message.hasRemaining()) {
-                timeoutFuture.cancel(false);
-                authLog.warn("Failure to authenticate connection(" + socket.socket().getRemoteSocketAddress() +
-                             "): wire protocol violation (timeout reading authentication strings).");
-                //Send negative response
-                responseBuffer.put(WIRE_PROTOCOL_TIMEOUT_ERROR).flip();
-                socket.write(responseBuffer);
-                socket.close();
+            } catch (IOException e) {
+                // Don't log a stack trace - assume a security probe sent a bad packet or the connection timed out.
+                try {
+                    socket.close();
+                } catch (IOException e1) {
+                }
                 return null;
             }
 
@@ -589,7 +629,6 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                 return null;
             }
 
-            message.flip();
             int aversion = message.get(); //Get version
             ClientAuthScheme hashScheme = ClientAuthScheme.HASH_SHA1;
             //If auth version is more than zero we read auth hashing scheme.
@@ -600,10 +639,15 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                     authLog.warn("Failure to authenticate connection Invalid Hash Scheme presented.");
                     //Send negative response
                     responseBuffer.put(WIRE_PROTOCOL_FORMAT_ERROR).flip();
-                    socket.write(responseBuffer);
+                    messagingChannel.writeMessage(responseBuffer);
                     socket.close();
                     return null;
                 }
+            }
+            //SHA1 is deprecated log it.
+            if (hashScheme == ClientAuthScheme.HASH_SHA1) {
+                m_rateLimitedLogger.log(EstTime.currentTimeMillis(), Level.WARN, null,
+                        "Client connected using deprecated SHA1 hashing. SHA2 is strongly recommended for all client connections. Client IP: %s", socket.socket().getRemoteSocketAddress().toString());
             }
             FastDeserializer fds = new FastDeserializer(message);
             final String service = fds.readString();
@@ -616,7 +660,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                         + "): user " + username + " failed authentication.");
                 //Send negative response
                 responseBuffer.put(AUTHENTICATION_FAILURE).flip();
-                socket.write(responseBuffer);
+                messagingChannel.writeMessage(responseBuffer);
                 socket.close();
                 return null;
             }
@@ -634,7 +678,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
             if (ap == null) {
                 //Send negative response
                 responseBuffer.put(EXPORT_DISABLED_REJECTION).flip();
-                socket.write(responseBuffer);
+                messagingChannel.writeMessage(responseBuffer);
                 socket.close();
                 authLog.warn("Rejected user " + username +
                         " attempting to use disabled or unconfigured service " +
@@ -657,7 +701,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                 /*
                  * Authenticate the user.
                  */
-                boolean authenticated = arq.authenticate(hashScheme);
+                boolean authenticated = arq.authenticate(hashScheme, socket.socket().getRemoteSocketAddress().toString());
 
                 if (!authenticated) {
                     Exception faex = arq.getAuthenticationFailureException();
@@ -677,7 +721,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                     //Send negative response
                     if (!isItIo) {
                         responseBuffer.put(AUTHENTICATION_FAILURE).flip();
-                        socket.write(responseBuffer);
+                        messagingChannel.writeMessage(responseBuffer);
                     }
                     socket.close();
                     return null;
@@ -687,7 +731,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                         "): user " + username + " because this node is rejoining.");
                 //Send negative response
                 responseBuffer.put(AUTHENTICATION_FAILURE_DUE_TO_REJOIN).flip();
-                socket.write(responseBuffer);
+                messagingChannel.writeMessage(responseBuffer);
                 socket.close();
                 return null;
             }
@@ -695,7 +739,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
             /*
              * Create an input handler.
              */
-            InputHandler handler = new ClientInputHandler(username, m_isAdmin);
+            ClientInputHandler handler = new ClientInputHandler(username, m_isAdmin);
 
             byte buildString[] = VoltDB.instance().getBuildString().getBytes(Charsets.UTF_8);
             responseBuffer = ByteBuffer.allocate(34 + buildString.length);
@@ -710,7 +754,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
             responseBuffer.putInt(VoltDB.instance().getHostMessenger().getInstanceId().getCoord());
             responseBuffer.putInt(buildString.length);
             responseBuffer.put(buildString).flip();
-            socket.write(responseBuffer);
+            messagingChannel.writeMessage(responseBuffer);
             return handler;
         }
     }
@@ -790,8 +834,16 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
              * Outstanding requests may actually still be at large
              */
             ClientInterfaceHandleManager cihm = m_cihm.remove(connectionId());
-            cihm.freeOutstandingTxns();
-            cihm.m_acg.removeMember(this);
+            // might be null if closing the interface in prep for self-kill / graceful shutdown
+            if (cihm != null) {
+                cihm.freeOutstandingTxns();
+                cihm.m_acg.removeMember(this);
+            }
+            // if null, check to ensure this CI is stopping
+            else if (m_isAcceptingConnections.get()) {
+                log.error("NULL ClientInterfaceHandleManager for active ClientInterface unexepected.");
+            }
+
             m_notifier.removeConnection(c);
         }
 
@@ -922,9 +974,17 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                     delta,
                     clientResponse.getStatus());
 
+            final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.CI);
+            if (traceLog != null) {
+                traceLog.add(() -> VoltTrace.endAsync("recvtxn",
+                                                      clientData.m_clientHandle,
+                                                      "status", Byte.toString(clientResponse.getStatus()),
+                                                      "statusString", clientResponse.getStatusString()));
+            }
+
             clientResponse.setClientHandle(clientData.m_clientHandle);
             clientResponse.setClusterRoundtrip((int)TimeUnit.NANOSECONDS.toMillis(delta));
-            clientResponse.setHash(null); // not part of wire protocol
+            clientResponse.setHashes(null); // not part of wire protocol
 
             return clientResponse.getSerializedSize() + 4;
         }
@@ -941,7 +1001,6 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         /**
          * Checks if the transaction needs to be restarted, if so, restart it.
          * @param messageSize the original message size when the invocation first came in
-         * @param now the current timestamp
          * @return true if the transaction is restarted successfully, false otherwise.
          */
         private boolean restartTransaction(int messageSize, long nowNanos)
@@ -1058,46 +1117,52 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
             CatalogContext context,
             ReplicationRole replicationRole,
             Cartographer cartographer,
-            int partitionCount,
             InetAddress clientIntf,
             int clientPort,
             InetAddress adminIntf,
             int adminPort,
-            long timestampTestingSalt) throws Exception {
-
-        // create a list of all partitions
-        int[] allPartitions = new int[partitionCount];
-        int index = 0;
-        for (Integer partition : cartographer.getPartitions()) {
-            if (partition != MpInitiator.MP_INIT_PID) {
-                allPartitions[index++] = partition;
-            }
-        }
+            SSLContext sslContext) throws Exception {
 
         /*
          * Construct the runnables so they have access to the list of connections
          */
         final ClientInterface ci = new ClientInterface(
-                clientIntf, clientPort, adminIntf, adminPort, context, messenger, replicationRole, cartographer, allPartitions);
+                clientIntf, clientPort, adminIntf, adminPort, context, messenger, replicationRole, cartographer, sslContext);
 
         return ci;
     }
 
     ClientInterface(InetAddress clientIntf, int clientPort, InetAddress adminIntf, int adminPort,
+                    CatalogContext context, HostMessenger messenger, ReplicationRole replicationRole,
+                    Cartographer cartographer) throws Exception {
+        this(clientIntf, clientPort, adminIntf, adminPort, context, messenger, replicationRole, cartographer, null);
+    }
+
+    ClientInterface(InetAddress clientIntf, int clientPort, InetAddress adminIntf, int adminPort,
             CatalogContext context, HostMessenger messenger, ReplicationRole replicationRole,
-            Cartographer cartographer, int[] allPartitions) throws Exception {
+            Cartographer cartographer, SSLContext sslContext) throws Exception {
         m_catalogContext.set(context);
         m_snapshotDaemon = new SnapshotDaemon(context);
         m_snapshotDaemonAdapter = new SnapshotDaemonAdapter();
         m_cartographer = cartographer;
 
         // pre-allocate single partition array
-        m_acceptor = new ClientAcceptor(clientIntf, clientPort, messenger.getNetwork(), false);
+        m_acceptor = new ClientAcceptor(clientIntf, clientPort, messenger.getNetwork(), false, sslContext);
         m_adminAcceptor = null;
-        m_adminAcceptor = new ClientAcceptor(adminIntf, adminPort, messenger.getNetwork(), true);
+        m_adminAcceptor = new ClientAcceptor(adminIntf, adminPort, messenger.getNetwork(), true, sslContext);
+
+        // Create the per-partition adapters before creating the mailbox. Once
+        // the mailbox is created, the master promotion notification may race
+        // with this.
+        m_internalConnectionHandler = new InternalConnectionHandler();
+        for (int pid : m_cartographer.getPartitions()) {
+            m_internalConnectionHandler.addAdapter(pid, createInternalAdapter(pid));
+        }
 
         m_mailbox = new LocalMailbox(messenger,  messenger.getHSIdForLocalSite(HostMessenger.CLIENT_INTERFACE_SITE_ID)) {
+            /** m_d only used in test */
             LinkedBlockingQueue<VoltMessage> m_d = new LinkedBlockingQueue<VoltMessage>();
+
             @Override
             public void deliver(final VoltMessage message) {
                 if (message instanceof InitiateResponseMessage) {
@@ -1105,6 +1170,17 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                     // forward response; copy is annoying. want slice of response.
                     InitiateResponseMessage response = (InitiateResponseMessage)message;
                     StoredProcedureInvocation invocation = response.getInvocation();
+
+                    // handle all host NT procedure callbacks
+                    if (response.getClientConnectionId() == NT_REMOTE_PROC_CID) {
+                        //int hostId = VoltDB.instance().getHostMessenger().getHostId();
+                        //System.out.printf("HostID %d got a response from an all-host NT proc\n", hostId);
+                        //System.out.flush();
+
+                        m_dispatcher.handleAllHostNTProcedureResponse(response.getClientResponseData());
+                        return;
+                    }
+
                     Iv2Trace.logFinishTransaction(response, m_mailbox.getHSId());
                     ClientInterfaceHandleManager cihm = m_cihm.get(response.getClientConnectionId());
                     Procedure procedure = null;
@@ -1120,13 +1196,50 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                         //Only the network can use the CIHM
                         cihm.connection.writeStream().fastEnqueue(new ClientResponseWork(response, cihm, procedure));
                     }
-                } else if (message instanceof BinaryPayloadMessage) {
+                }
+                else if (message instanceof BinaryPayloadMessage) {
                     handlePartitionFailOver((BinaryPayloadMessage)message);
-                } else {
+                }
+                /*
+                 * InitiateTaskMessage only get delivered here for all-host NT proc calls.
+                 */
+                else if (message instanceof Iv2InitiateTaskMessage) {
+                    final Iv2InitiateTaskMessage itm = (Iv2InitiateTaskMessage) message;
+                    final StoredProcedureInvocation invocation = itm.getStoredProcedureInvocation();
+
+                    // get hostid for this node
+                    final int hostId = CoreUtils.getHostIdFromHSId(m_mailbox.getHSId());
+
+                    final ProcedureCallback cb = new ProcedureCallback() {
+                        @Override
+                        public void clientCallback(ClientResponse clientResponse) throws Exception {
+                            InitiateResponseMessage responseMessage = new InitiateResponseMessage(itm);
+                            // use the app status string to store the host id (as a string)
+                            // ProcedureRunnerNT has a method that expects this hack
+                            ((ClientResponseImpl) clientResponse).setAppStatusString(String.valueOf(hostId));
+                            responseMessage.setResults((ClientResponseImpl) clientResponse);
+                            responseMessage.setClientHandle(invocation.clientHandle);
+                            responseMessage.setConnectionId(NT_REMOTE_PROC_CID);
+                            m_mailbox.send(itm.m_sourceHSId, responseMessage);
+                        }
+                    };
+
+                    m_internalConnectionHandler.callProcedure(m_catalogContext.get().authSystem.getInternalAdminUser(),
+                                                              true,
+                                                              1000 * 120,
+                                                              cb,
+                                                              true, // priority NT
+                                                              null, // back pressure predicate
+                                                              invocation.getProcName(),
+                                                              itm.getParameters());
+                }
+                else {
+                    // m_d is for test only
                     m_d.offer(message);
                 }
             }
 
+            /** This method only used in test */
             @Override
             public VoltMessage recv() {
                 return m_d.poll();
@@ -1137,8 +1250,10 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         m_zk = messenger.getZK();
         m_siteId = m_mailbox.getHSId();
 
+        m_executeTaskAdpater = new SimpleClientResponseAdapter(ClientInterface.EXECUTE_TASK_CID, "ExecuteTaskAdapter", true);
+        bindAdapter(m_executeTaskAdpater, null);
+
         m_dispatcher = InvocationDispatcher.builder()
-                .allPartitions(allPartitions)
                 .snapshotDaemon(m_snapshotDaemon)
                 .replicationRole(replicationRole)
                 .cartographer(m_cartographer)
@@ -1147,14 +1262,14 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                 .clientInterfaceHandleManagerMap(m_cihm)
                 .plannerSiteId(m_plannerSiteId)
                 .siteId(m_siteId)
+                .internalConnectionHandler(m_internalConnectionHandler)
                 .build();
+    }
 
-        InternalClientResponseAdapter internalAdapter = new InternalClientResponseAdapter(INTERNAL_CID);
-        ClientInterfaceHandleManager ichm = bindAdapter(internalAdapter, null, true);
-        m_internalConnectionHandler = new InternalConnectionHandler(internalAdapter, ichm);
-
-        m_executeTaskAdpater = new SimpleClientResponseAdapter(ClientInterface.EXECUTE_TASK_CID, "ExecuteTaskAdapter", true);
-        bindAdapter(m_executeTaskAdpater, null);
+    private InternalClientResponseAdapter createInternalAdapter(int pid) {
+        InternalClientResponseAdapter internalAdapter = new InternalClientResponseAdapter(INTERNAL_CID + pid);
+        bindAdapter(internalAdapter, null, true);
+        return internalAdapter;
     }
 
     public InternalConnectionHandler getInternalConnectionHandler() {
@@ -1179,6 +1294,11 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                     failOverConnection(partitionId, initiatorHSId, cihm.connection);
                 }
             }
+
+            // Create adapters here so that it works for elastic add.
+            if (!m_internalConnectionHandler.hasAdapter(partitionId)) {
+                m_internalConnectionHandler.addAdapter(partitionId, createInternalAdapter(partitionId));
+            }
         } catch (Exception e) {
             hostLog.warn("Error handling partition fail over at ClientInterface, continuing anyways", e);
         }
@@ -1196,7 +1316,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         }
 
         List<Iv2InFlight> transactions =
-                cihm.removeHandlesForPartitionAndInitiator( partitionId, initiatorHSId);
+                cihm.removeHandlesForPartitionAndInitiator(partitionId, initiatorHSId);
 
         for (Iv2InFlight inFlight : transactions) {
             ClientResponseImpl response =
@@ -1207,7 +1327,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                             new VoltTable[0],
                             "Transaction dropped due to change in mastership. " +
                             "It is possible the transaction was committed");
-            response.setClientHandle( inFlight.m_clientHandle );
+            response.setClientHandle(inFlight.m_clientHandle);
             ByteBuffer buf = ByteBuffer.allocate(response.getSerializedSize() + 4);
             buf.putInt(buf.capacity() - 4);
             response.flattenToBuffer(buf);
@@ -1319,6 +1439,14 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
          */
         if (VoltDB.instance().getMode() != OperationMode.INITIALIZING) {
             mayActivateSnapshotDaemon();
+
+            //add a notification to client right away
+            StoredProcedureInvocation spi = new StoredProcedureInvocation();
+            spi.setProcName("@SystemCatalog");
+            spi.setParams("PROCEDURES");
+            spi.setClientHandle(ASYNC_PROC_HANDLE);
+            notifyClients(m_currentProcValues,m_currentProcSupplier,
+                           spi, OpsSelector.SYSTEMCATALOG);
         }
     }
 
@@ -1339,7 +1467,6 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
 
     /**
      *
-     * @param port
      * * return True if an error was generated and needs to be returned to the client
      */
     final ClientResponseImpl handleRead(ByteBuffer buf, ClientInputHandler handler, Connection ccxn) {
@@ -1358,16 +1485,23 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
             return errorResponse(ccxn, task.clientHandle, ClientResponse.UNEXPECTED_FAILURE, errorMessage, null, false);
         }
 
-        return m_dispatcher.dispatch(task, handler, ccxn, user);
+        final ClientResponseImpl errResp = m_dispatcher.dispatch(task, handler, ccxn, user, null, false);
+
+        if (errResp != null) {
+            final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.CI);
+            if (traceLog != null) {
+                traceLog.add(() -> VoltTrace.endAsync("recvtxn",
+                                                      task.getClientHandle(),
+                                                      "status", Byte.toString(errResp.getStatus()),
+                                                      "statusString", errResp.getStatusString()));
+            }
+        }
+
+        return errResp;
     }
 
     public Procedure getProcedureFromName(String procName, CatalogContext catalogContext) {
         return InvocationDispatcher.getProcedureFromName(procName, catalogContext);
-    }
-
-    public void dispatchUpdateApplicationCatalog(StoredProcedureInvocation task,
-            boolean useDdlSchema, Connection ccxn, AuthSystem.AuthUser user, boolean isAdmin) {
-        m_dispatcher.dispatchUpdateApplicationCatalog(task, useDdlSchema, ccxn, user, isAdmin);
     }
 
     private ScheduledFuture<?> m_deadConnectionFuture;
@@ -1413,25 +1547,53 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         }
     };
 
+    private final AtomicReference<DeferredSerialization> m_currentProcValues = new AtomicReference<>(null);
+    private final Supplier<DeferredSerialization> m_currentProcSupplier = new Supplier<DeferredSerialization>() {
+        @Override
+        public DeferredSerialization get() {
+            return m_currentProcValues.get();
+        }
+    };
+
     /*
      * A predicate to allow the client notifier to skip clients
      * that don't want a specific kind of update
      */
     private final Predicate<ClientInterfaceHandleManager> m_wantsTopologyUpdatesPredicate =
             new Predicate<ClientInterfaceHandleManager>() {
-                @Override
-                public boolean apply(ClientInterfaceHandleManager input) {
-                    return input.wantsTopologyUpdates();
-                }};
+        @Override
+        public boolean apply(ClientInterfaceHandleManager input) {
+            return input.wantsTopologyUpdates();
+        }
+    };
 
     /*
-     * Submit a task to the stats agent to retrieve the topology. Supply a dummy
+     * Submit a task to the stats agent to retrieve the topology and procedures. Supply a dummy
      * client response adapter to fake a connection. The adapter converts the response
      * to a listenable future and we add a listener to pick up the resulting topology
      * and check if it has changed. If it has changed, queue a task to the notifier
      * to propagate the update to clients.
      */
     private void checkForTopologyChanges() {
+        StoredProcedureInvocation spi = new StoredProcedureInvocation();
+        spi.setProcName("@Statistics");
+        spi.setParams("TOPO", 0);
+        spi.setClientHandle(ASYNC_TOPO_HANDLE);
+        notifyClients(m_currentTopologyValues,m_currentTopologySupplier,
+                         spi, OpsSelector.STATISTICS);
+
+        spi = new StoredProcedureInvocation();
+        spi.setProcName("@SystemCatalog");
+        spi.setParams("PROCEDURES");
+        spi.setClientHandle(ASYNC_PROC_HANDLE);
+        notifyClients(m_currentProcValues,m_currentProcSupplier,
+                        spi, OpsSelector.SYSTEMCATALOG);
+    }
+
+    private void notifyClients( AtomicReference<DeferredSerialization> values,
+                                Supplier<DeferredSerialization> supplier,
+                                StoredProcedureInvocation spi,
+                                OpsSelector selector) {
         final Pair<SimpleClientResponseAdapter, ListenableFuture<ClientResponseImpl>> p =
                 SimpleClientResponseAdapter.getAsListenableFuture();
         final ListenableFuture<ClientResponseImpl> fut = p.getSecond();
@@ -1441,7 +1603,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                 try {
                     final ClientResponseImpl r = fut.get();
                     if (r.getStatus() != ClientResponse.SUCCESS) {
-                        hostLog.warn("Received error response retrieving topology: " + r.getStatusString());
+                        hostLog.warn("Received error response retrieving stats info: " + r.getStatusString());
                         return;
                     }
 
@@ -1453,18 +1615,17 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
 
                     //Check for no change
                     ByteBuffer oldValue = null;
-                    DeferredSerialization ds = m_currentTopologyValues.get();
+                    DeferredSerialization ds = values.get();
                     if (ds != null) {
                         oldValue = ByteBuffer.allocate(ds.getSerializedSize());
                         ds.serialize(oldValue);
                         oldValue.flip();
+                        if (buf.equals(oldValue)) {
+                            return;
+                        }
                     }
 
-                    if (buf.equals(oldValue)) {
-                        return;
-                    }
-
-                    m_currentTopologyValues.set(new DeferredSerialization() {
+                    values.set(new DeferredSerialization() {
                         @Override
                         public void serialize(ByteBuffer outbuf) throws IOException {
                             outbuf.put(buf.duplicate());
@@ -1473,27 +1634,20 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
                         public void cancel() {}
 
                         @Override
-                        public int getSerializedSize() {
-                            return buf.remaining();
-                        }
+                        public int getSerializedSize() {return buf.remaining();}
                     });
                     if (oldValue != null) {
                         m_notifier.queueNotification(
                                 m_cihm.values(),
-                                m_currentTopologySupplier,
+                                supplier,
                                 m_wantsTopologyUpdatesPredicate);
                     }
-
                 } catch (Throwable t) {
-                    hostLog.error("Error checking for topology updates", Throwables.getRootCause(t));
+                    hostLog.error("Error checking for updates", Throwables.getRootCause(t));
                 }
             }
         }, CoreUtils.SAMETHREADEXECUTOR);
-        final StoredProcedureInvocation spi = new StoredProcedureInvocation();
-        spi.setProcName("@Statistics");
-        spi.setParams("TOPO", 0);
-        spi.setClientHandle(ASYNC_TOPO_HANDLE);
-        InvocationDispatcher.dispatchStatistics(OpsSelector.STATISTICS, spi, p.getFirst());
+        InvocationDispatcher.dispatchStatistics(selector, spi, p.getFirst());
     }
 
     private static final long CLIENT_HANGUP_TIMEOUT = Long.getLong("CLIENT_HANGUP_TIMEOUT", 30000);
@@ -1554,7 +1708,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
     }
 
     public void startAcceptingConnections() throws IOException {
-        m_dispatcher.asynchronouslyDetermineLocalReplicas();
+        Future<?> replicaFuture = m_dispatcher.asynchronouslyDetermineLocalReplicas();
 
         /*
          * Periodically check the limit on the number of open files
@@ -1577,15 +1731,19 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         mayActivateSnapshotDaemon();
         m_notifier.start();
 
+        try {
+            replicaFuture.get();
+        } catch (InterruptedException e) {
+            throw new IOException("Interrupted while determining local replicas",e);
+        } catch (ExecutionException e) {
+            throw new IOException("Failed to determine local replicas", e.getCause());
+        }
+
         m_isAcceptingConnections.compareAndSet(false, true);
     }
 
     public boolean isAcceptingConnections() {
         return m_isAcceptingConnections.get();
-    }
-
-    static final int getPartitionForProcedure(Procedure procedure, StoredProcedureInvocation task) throws Exception {
-        return InvocationDispatcher.getPartitionForProcedure(procedure, task);
     }
 
     @Override
@@ -1597,7 +1755,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         }
         Procedure catProc = sysProc.asCatalogProcedure();
         StoredProcedureInvocation spi = new StoredProcedureInvocation();
-        spi.procName = procedureName;
+        spi.setProcName(procedureName);
         spi.params = new FutureTask<ParameterSet>(new Callable<ParameterSet>() {
             @Override
             public ParameterSet call() {
@@ -1848,7 +2006,7 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         if (ex != null) {
             exMsg = ex.getMessage();
         }
-        String errorMessage = "Error sending procedure " + task.procName
+        String errorMessage = "Error sending procedure " + task.getProcName()
                 + " to the correct partition. Make sure parameter values are correct."
                 + " Parameter value " + invocationParameter
                 + ", partition column " + catProc.getPartitioncolumn().getName()
@@ -1869,23 +2027,9 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
      * @throws IOException
      * @throws InterruptedException
      */
-    public ClientResponse callExecuteTask(long timeoutMS, byte[] params ) throws IOException, InterruptedException {
-        final String procedureName = "@ExecuteTask";
-        Config procedureConfig = SystemProcedureCatalog.listing.get(procedureName);
-        Procedure proc = procedureConfig.asCatalogProcedure();
-        StoredProcedureInvocation spi = new StoredProcedureInvocation();
-        spi.setProcName(procedureName);
-        spi.setParams(params);
+    public ClientResponse callExecuteTask(long timeoutMS, byte[] params) throws IOException, InterruptedException {
         SimpleClientResponseAdapter.SyncCallback syncCb = new SimpleClientResponseAdapter.SyncCallback();
-        spi.setClientHandle(m_executeTaskAdpater.registerCallback(syncCb));
-        if (spi.getSerializedParams() == null) {
-            spi = MiscUtils.roundTripForCL(spi);
-        }
-        createTransaction(m_executeTaskAdpater.connectionId(), spi,
-                proc.getReadonly(), proc.getSinglepartition(), proc.getEverysite(),
-                0 /* Can provide anything for multi-part */,
-                spi.getSerializedSize(), System.nanoTime());
-
+        callExecuteTaskAsync(syncCb, params);
         return syncCb.getResponse(timeoutMS);
     }
 
@@ -1909,11 +2053,12 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
         if (spi.getSerializedParams() == null) {
             spi = MiscUtils.roundTripForCL(spi);
         }
-        createTransaction(m_executeTaskAdpater.connectionId(), spi,
-                proc.getReadonly(), proc.getSinglepartition(), proc.getEverysite(),
-                0 /* Can provide anything for multi-part */,
-                spi.getSerializedSize(), System.nanoTime());
-
+        synchronized (m_executeTaskAdpater) {
+            createTransaction(m_executeTaskAdpater.connectionId(), spi,
+                    proc.getReadonly(), proc.getSinglepartition(), proc.getEverysite(),
+                    0 /* Can provide anything for multi-part */,
+                    spi.getSerializedSize(), System.nanoTime());
+        }
     }
 
     /**
@@ -1945,8 +2090,9 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
             return false;
         }
         finally {
+            m_isAcceptingConnections.set(false);
             // this feels like an unclean thing to do... but should work
-            // for the purposes of cutting all responses right before we deliberatly
+            // for the purposes of cutting all responses right before we deliberately
             // end the process
             // m_cihm itself is threadsafe, and the regular shutdown code won't
             // care if it's empty... so... this.
@@ -1958,5 +2104,9 @@ public class ClientInterface implements SnapshotDaemon.DaemonInitiator {
 
     public AuthUser getInternalUser() {
         return m_catalogContext.get().authSystem.getInternalAdminUser();
+    }
+
+    void handleFailedHosts(Set<Integer> failedHosts) {
+        m_dispatcher.handleFailedHosts(failedHosts);
     }
 }

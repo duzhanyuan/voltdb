@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -42,6 +42,8 @@
 
 package client.kafkaimporter;
 
+import java.io.FileWriter;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -86,6 +88,8 @@ public class KafkaImportBenchmark {
     static Timer checkTimer;
     // Benchmark start time
     long benchmarkStartTS;
+
+    final ClientStatsContext fullStatsContext;
 
     static final Map<HostAndPort, OutputStream> haplist = new HashMap<HostAndPort, OutputStream>();
     static Client client;
@@ -141,6 +145,12 @@ public class KafkaImportBenchmark {
         @Option(desc = "Filename to write raw summary statistics to.")
         String statsfile = "";
 
+        @Option(desc = "Are we running the multi-stream/nmulti topic test?")
+        boolean streamtest = false;
+
+        @Option(desc = "Number of streams and topics we're importing.")
+        int streams = 1;
+
         @Override
         public void validate() {
             if (duration <= 0) exitWithMessageAndUsage("duration must be > 0");
@@ -162,6 +172,7 @@ public class KafkaImportBenchmark {
     public KafkaImportBenchmark(Config config) {
         this.config = config;
         periodicStatsContext = client.createStatsContext();
+        fullStatsContext = client.createStatsContext();
 
         log.info(HORIZONTAL_RULE);
         log.info(" Command Line Configuration");
@@ -338,7 +349,6 @@ public class KafkaImportBenchmark {
         try {
             Thread.sleep(1 * 1000 * 60);  // wait for 1 minute
         } catch (InterruptedException e) {
-            // TODO Auto-generated catch block
             e.printStackTrace();
         }
         try {
@@ -352,7 +362,38 @@ public class KafkaImportBenchmark {
             return false;
     }
 
-    public static void endTest(boolean testResult) {
+    public static void endTest(boolean testResult, Config config) {
+        // Write stats to file if requested
+        try {
+            if ((config.statsfile != null) && (config.statsfile.length() != 0)) {
+                log.info("Stats file: " + config.statsfile);
+                FileWriter fw = new FileWriter(config.statsfile);
+
+                // stats: row count, latest time, earliest time
+                long[] stats  = MatchChecks.getStats(client);
+                log.info("rows: " + stats[0] + ". End timestamp: " + stats[1] + ". Start timestamp: " + stats[2]);
+                // Date date = new Date(stats[2]);
+                //    LocalDateTime.ofInstant(Instant.ofEpochMilli(stats[2]*1000), ZoneId.systemDefault());
+                double tps = stats[0] / ((double)stats[1] - (double)stats[2]);
+                log.info("TPS: " + tps);
+                log.info("Stats string: " + String.format("%d,%d,%d,%d,%d,%d,%d,0,0,0,0,0,0\n",
+                    stats[2], config.duration, 0, 0, 0, 0, (long)tps));
+                fw.append(String.format("%d,%d,%d,%d,%d,%d,%d,0,0,0,0,0,0\n",
+                            stats[2],
+                            (stats[1]-stats[2])*1000,
+                            stats[0],
+                            0,
+                            0,
+                            0,
+                            0
+                            ));
+                fw.close();
+            }
+        } catch (IOException e) {
+            System.err.println("Error writing stats file");
+            e.printStackTrace();
+        }
+
         try {
             client.drain();
             client.close();
@@ -391,7 +432,7 @@ public class KafkaImportBenchmark {
         // minute to settle
         if (config.expected_rows == 0) {
             testResult = verifyZero();
-            endTest(testResult);
+            endTest(testResult, config);
         }
 
         // instance handles inserts to Kafka export table and its mirror DB table
@@ -423,9 +464,11 @@ public class KafkaImportBenchmark {
                 importProgress.get(importProgress.size()-1) > importProgress.get(importProgress.size()-4) );
 
         long[] importStatValues = MatchChecks.getImportValues(client);
-        long mirrorRows = MatchChecks.getMirrorTableRowCount(config.alltypes, client);
+        long mirrorRows = 0;
+        if (!config.streamtest) mirrorRows = MatchChecks.getMirrorTableRowCount(config.alltypes, client);
         long importRows = MatchChecks.getImportTableRowCount(config.alltypes, client);
-        long importRowCount = MatchChecks.getImportRowCount(client);
+        long importRowCount = 0;
+        if (!config.streamtest) importRowCount = MatchChecks.getImportRowCount(client);
 
         // in case of pause / resume tweak, let it drain longer
         int trial = 3;
@@ -433,16 +476,18 @@ public class KafkaImportBenchmark {
                 ((--trial > 0) && ((importStatValues[OUTSTANDING_REQUESTS] > 0) || (importRows < config.expected_rows)))) {
             Thread.sleep(PAUSE_WAIT * 1000);
             importStatValues = MatchChecks.getImportValues(client);
-            mirrorRows = MatchChecks.getMirrorTableRowCount(config.alltypes, client);
+            if (!config.streamtest) mirrorRows = MatchChecks.getMirrorTableRowCount(config.alltypes, client);
             importRows = MatchChecks.getImportTableRowCount(config.alltypes, client);
-            importRowCount = MatchChecks.getImportRowCount(client);
+            // importRowCount = MatchChecks.getImportRowCount(client);
         }
 
         // some counts that might help debugging....
         log.info("importer outstanding requests: " + importStatValues[OUTSTANDING_REQUESTS]);
-        log.info("mirrorRows: " + mirrorRows);
         log.info("importRows: " + importRows);
-        log.info("importRowCount: " + importRowCount);
+        if (!config.streamtest) {
+            log.info("mirrorRows: " + mirrorRows);
+            log.info("importRowCount: " + importRowCount);
+        }
         if (config.useexport) {
             log.info("exportRowCount: " + exportRowCount);
         }
@@ -466,10 +511,10 @@ public class KafkaImportBenchmark {
             testResult = false;
         }
 
-        if (!config.useexport) {
+        if (!config.useexport && !config.streamtest) {
             testResult = MatchChecks.checkPounderResults(config.expected_rows, client);
         }
 
-        endTest(testResult);
+        endTest(testResult, config);
     }
 }

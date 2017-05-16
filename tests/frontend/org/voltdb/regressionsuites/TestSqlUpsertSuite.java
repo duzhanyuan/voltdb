@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -302,6 +302,63 @@ public class TestSqlUpsertSuite extends RegressionSuite {
                 errorMsg);
     }
 
+    public void testUpsertWithSubquery() throws IOException, ProcCallException {
+        Client client = getClient();
+        VoltTable vt = null;
+
+        vt = client.callProcedure("@AdHoc", String.format(
+                "Insert into %s values(%d, %d, %d)", "R2", 1, 1, 1)).getResults()[0];
+        vt = client.callProcedure("@AdHoc", String.format(
+                "Insert into %s values(%d, %d, %d)", "R2", 2, 2, 2)).getResults()[0];
+        vt = client.callProcedure("@AdHoc", String.format(
+                "Insert into %s values(%d, %d, %d)", "R2", 3, 3, 3)).getResults()[0];
+
+        String[] tables = {"R1"};
+
+        for (String tb : tables) {
+            String query = "select ID, wage, dept from " + tb + " order by ID, dept";
+            String upsert = "UPSERT INTO " + tb + " (ID, WAGE, DEPT) " +
+                    "SELECT ID, WAGE, DEPT FROM R2 WHERE NOT EXISTS (SELECT 1 FROM " + tb +
+                    " WHERE " + tb + ".DEPT = R2.DEPT) ORDER BY 1, 2, 3;";
+
+            // This row should stay as is - not in the result set of the UPSERT'S SELECT
+            vt = client.callProcedure("@AdHoc", String.format(
+                    "Insert into %s values(%d, %d, %d)", tb, 1, 2, 1)).getResults()[0];
+            // This row should be updated - in the TB and in the result set of the UPSERT'S SELECT
+            vt = client.callProcedure("@AdHoc", String.format(
+                    "Insert into %s values(%d, %d, %d)", tb, 3, 3, 1)).getResults()[0];
+            // The R2 (2,2,2) should be inserted to TB
+
+            vt = client.callProcedure("@AdHoc", upsert).getResults()[0];
+            validateTableOfLongs(vt, new long[][] {{2}});
+
+            vt = client.callProcedure("@AdHoc", query).getResults()[0];
+            validateTableOfLongs(vt, new long[][] {{1,2,1}, {2,2,2}, {3,3,3}});
+
+            // insert
+            upsert = "UPSERT INTO " + tb + " (ID, WAGE, DEPT) " +
+                    "VALUES((SELECT MAX(ID) + 5 FROM R2), 0, 0);";
+            vt = client.callProcedure("@AdHoc", upsert).getResults()[0];
+            validateTableOfLongs(vt, new long[][] {{1}});
+            vt = client.callProcedure("@AdHoc", query).getResults()[0];
+            validateTableOfLongs(vt, new long[][] {{1,2,1}, {2,2,2}, {3,3,3}, {8, 0, 0} });
+
+            // update
+            upsert = "UPSERT INTO " + tb + " (ID, WAGE, DEPT) " +
+                    "VALUES((SELECT MAX(ID) + 5 FROM R2), 1, 1);";
+            vt = client.callProcedure("@AdHoc", upsert).getResults()[0];
+            validateTableOfLongs(vt, new long[][] {{1}});
+            vt = client.callProcedure("@AdHoc", query).getResults()[0];
+            validateTableOfLongs(vt, new long[][] {{1,2,1}, {2,2,2}, {3,3,3}, {8, 1, 1} });
+
+            // Upsert with a non-scalar subquery expression
+            String expectedMsg = "More than one row returned by a scalar/row subquery";
+            verifyStmtFails(client, "UPSERT INTO " + tb + " (ID, WAGE, DEPT) " +
+                    "VALUES((SELECT ID FROM R2), 1, 1)", expectedMsg);
+        }
+
+    }
+
     //
     // JUnit / RegressionSuite boilerplate
     //
@@ -365,19 +422,16 @@ public class TestSqlUpsertSuite extends RegressionSuite {
                 "DEPT INTEGER);" +
                 "PARTITION TABLE UP2 ON COLUMN ID;" +
 
-                // Export table
-                "CREATE TABLE UR3 ( " +
+                // Stream table
+                "CREATE STREAM UR3 ( " +
                 "ID INTEGER NOT NULL, " +
                 "WAGE INTEGER DEFAULT 1, " +
                 "DEPT INTEGER);" +
-                "EXPORT TABLE UR3;" +
 
-                "CREATE TABLE UP3 ( " +
+                "CREATE STREAM UP3 PARTITION ON COLUMN ID ( " +
                 "ID INTEGER NOT NULL, " +
                 "WAGE INTEGER DEFAULT 1, " +
                 "DEPT INTEGER);" +
-                "PARTITION TABLE UP3 ON COLUMN ID;" +
-                "EXPORT TABLE UP3;" +
 
                 ""
                 ;

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -41,6 +41,10 @@ class Topend {
   public:
     virtual int loadNextDependency(
         int32_t dependencyId, voltdb::Pool *pool, Table* destination) = 0;
+
+    virtual void traceLog(bool isBegin,
+                          const char *name,
+                          const char *args) {};
 
     // Update the topend on query progress and give the topend a chance to tell the
     // query to stop.

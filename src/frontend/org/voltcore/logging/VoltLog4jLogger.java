@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -67,14 +67,14 @@ public class VoltLog4jLogger implements CoreVoltLogger {
    /*
      * Encoding for various log settings that will fit in 3 bits
      */
-    public static final int all = 0;
-    public static final int trace = 1;
-    public static final int debug = 2;
-    public static final int info = 3;
-    public static final int warn = 4;
-    public static final int error = 5;
-    public static final int fatal = 6;
-    public static final int off = 7;
+    public static final long all = 0;
+    public static final long trace = 1;
+    public static final long debug = 2;
+    public static final long info = 3;
+    public static final long warn = 4;
+    public static final long error = 5;
+    public static final long fatal = 6;
+    public static final long off = 7;
 
     /** Underlying Log4j logger */
     final Logger m_logger;
@@ -179,10 +179,11 @@ public class VoltLog4jLogger implements CoreVoltLogger {
      * Static method to change the Log4j config globally.
      * @param xmlConfig The text of a Log4j config file.
      */
-    public static void configure(String xmlConfig) {
+    public static void configure(String xmlConfig, File voltroot) {
         DOMConfigurator configurator = new DOMConfigurator();
         StringReader sr = new StringReader(xmlConfig.trim());
         configurator.doConfigure(sr, LogManager.getLoggerRepository());
+        setFileLoggerRoot(voltroot);
     }
 
     /**

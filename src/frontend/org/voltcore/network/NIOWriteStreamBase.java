@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.GatheringByteChannel;
 import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.concurrent.TimeUnit;
 
 import org.voltcore.logging.Level;
@@ -36,7 +37,7 @@ import org.voltcore.utils.RateLimitedLogger;
 * is queuing writes which have different locking and backpressure policies
 */
 public abstract class NIOWriteStreamBase {
-    private static final VoltLogger networkLog = new VoltLogger("NETWORK");
+    protected static final VoltLogger networkLog = new VoltLogger("NETWORK");
 
     protected boolean m_isShutdown = false;
 
@@ -87,17 +88,17 @@ public abstract class NIOWriteStreamBase {
 
     abstract int drainTo (final GatheringByteChannel channel) throws IOException;
 
-    protected abstract ArrayDeque<DeferredSerialization> getQueuedWrites();
+    protected abstract Deque<DeferredSerialization> getQueuedWrites();
 
     /**
-     * Swap the two queues of DeferredSerializations and serialize everything into the queue
-     * of pending buffers
-     * @return
+     * Serialize all queued writes into the queue of pending buffers, which are allocated from
+     * thread local memory pool.
+     * @return number of queued writes processed
      * @throws IOException
      */
-    final int swapAndSerializeQueuedWrites(final NetworkDBBPool pool) throws IOException {
+    int serializeQueuedWrites(final NetworkDBBPool pool) throws IOException {
         int processedWrites = 0;
-        final ArrayDeque<DeferredSerialization> oldlist = getQueuedWrites();
+        final Deque<DeferredSerialization> oldlist = getQueuedWrites();
         if (oldlist.isEmpty()) return 0;
 
         DeferredSerialization ds = null;
@@ -116,8 +117,8 @@ public abstract class NIOWriteStreamBase {
 
             outbuf = outCont.b();
 
-            //Fastpath, serialize to direct buffer creating no garbage
             if (outbuf.remaining() >= serializedSize) {
+                // Fast path, serialize to direct buffer creating no garbage
                 final int oldLimit = outbuf.limit();
                 outbuf.limit(outbuf.position() + serializedSize);
                 final ByteBuffer slice = outbuf.slice();
@@ -128,12 +129,13 @@ public abstract class NIOWriteStreamBase {
                 outbuf.position(outbuf.limit());
                 outbuf.limit(oldLimit);
             } else {
-                //Slow path serialize to heap, and then put in buffers
+                // Slow path serialize to heap, and then put in buffers
                 ByteBuffer buf = ByteBuffer.allocate(serializedSize);
                 ds.serialize(buf);
                 checkSloppySerialization(buf, ds);
                 buf.position(0);
                 bytesQueued += buf.remaining();
+                // Copy data allocated in heap buffer to direct buffer
                 while (buf.hasRemaining()) {
                     if (!outbuf.hasRemaining()) {
                         outCont = pool.acquire();
@@ -167,7 +169,7 @@ public abstract class NIOWriteStreamBase {
      * Validate that serialization is accurately reporting the amount of data necessary
      * to serialize the message
      */
-    private void checkSloppySerialization(ByteBuffer buf, DeferredSerialization ds) {
+    protected void checkSloppySerialization(ByteBuffer buf, DeferredSerialization ds) {
         if (buf.limit() != buf.capacity()) {
             if (ASSERT_ON) {
                 networkLog.fatal("Sloppy serialization size for message class " + ds);

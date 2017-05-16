@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -232,26 +232,32 @@ public class TestImportSuite extends RegressionSuite {
         }
         assertTrue(error, success);
 
-       ClientResponse response = client.callProcedure("@Statistics", "Initiator", 0);
-       VoltTable stats = response.getResults()[0];
-       int foundCount = 0;
-       for (int i=0; i<stats.getRowCount(); i++) {
-           VoltTableRow row = stats.fetchRow(i);
-           String name = row.getString(CONN_HOST_COL);
-           if (!expectedStatRows.containsKey(name)) {
-               continue;
-           }
-           foundCount++;
-           assertEquals(expectedStatRows.get(name), row.getString(PROC_NAME_COL));
-           long invocations = row.getLong(INVOCATIONS_COL);
-           if (min<0) {
-               assertEquals(count, invocations);
-           } else {
-               assertTrue(invocations>=min && invocations <= count);
-           }
-       }
+        ClientResponse response = client.callProcedure("@Statistics", "Initiator", 0);
+        VoltTable stats = response.getResults()[0];
+        Map<String, Long> statsRollup = new HashMap<>();
+        for (int i=0; i<stats.getRowCount(); i++) {
+            VoltTableRow row = stats.fetchRow(i);
+            String name = row.getString(CONN_HOST_COL);
+            if (!expectedStatRows.containsKey(name)) {
+                continue;
+            }
+            assertEquals(expectedStatRows.get(name), row.getString(PROC_NAME_COL));
+            long invocations = row.getLong(INVOCATIONS_COL);
 
-       assertEquals(expectedStatRows.size(), foundCount);
+            // Importers use more than one internal adapters, they'll show up as multiple rows.
+            if (statsRollup.computeIfPresent(name, (k, v) -> v + invocations) == null) {
+                statsRollup.put(name, invocations);
+            }
+        }
+
+        assertEquals(expectedStatRows.size(), statsRollup.size());
+        for (long invocations : statsRollup.values()) {
+            if (min<0) {
+                assertEquals(count, invocations);
+            } else {
+                assertTrue(invocations>=min && invocations <= count);
+            }
+        }
     }
 
     public void testImportSimpleData() throws Exception {
@@ -351,7 +357,7 @@ public class TestImportSuite extends RegressionSuite {
     static public junit.framework.Test suite() throws Exception
     {
         LocalCluster config;
-        Map<String, String> additionalEnv = new HashMap<String, String>();
+        Map<String, String> additionalEnv = new HashMap<>();
         //Specify bundle location
         String bundleLocation = System.getProperty("user.dir") + "/bundles";
         System.out.println("Bundle location is: " + bundleLocation);
@@ -388,7 +394,7 @@ public class TestImportSuite extends RegressionSuite {
         config.setHasLocalServer(false);
         boolean compile = config.compile(project);
         assertTrue(compile);
-        builder.addServerConfig(config);
+        builder.addServerConfig(config, false);
 
         return builder;
     }

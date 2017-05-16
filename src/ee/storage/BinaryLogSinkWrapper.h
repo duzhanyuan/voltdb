@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -18,7 +18,6 @@
 #define BINARYLOGSINKWRAPPER_H
 
 #include "storage/BinaryLogSink.h"
-#include "storage/CompatibleBinaryLogSink.h"
 
 #include <boost/unordered_map.hpp>
 #include <boost/shared_ptr.hpp>
@@ -40,7 +39,6 @@ public:
                   Pool *pool, VoltDBEngine *engine, int32_t remoteClusterId);
 private:
     BinaryLogSink m_sink;
-    CompatibleBinaryLogSink m_compatibleSink;
 };
 
 

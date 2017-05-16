@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -115,7 +115,13 @@ abstract public class ProcedureTask extends TransactionTask
                 // execute the procedure
                 cr = runner.call(callerParams);
 
-                m_txnState.setHash(cr.getHash());
+                // pass in the first value in the hashes array if it's not null
+                Integer hash = null;
+                int[] hashes = cr.getHashes();
+                if (hashes != null && hashes.length > 0) {
+                    hash = hashes[0];
+                }
+                m_txnState.setHash(hash);
                 //Don't pay the cost of returning the result tables for a replicated write
                 //With reads don't apply the optimization just in case
                 //                    if (!task.shouldReturnResultTables() && !task.isReadOnly()) {

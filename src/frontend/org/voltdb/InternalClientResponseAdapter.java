@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,6 +17,8 @@
 
 package org.voltdb;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
@@ -25,8 +27,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 
 import org.cliffc_voltpatches.high_scale_lib.NonBlockingHashMap;
 import org.voltcore.logging.Level;
@@ -53,8 +57,7 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
 
     private static final VoltLogger m_logger = new VoltLogger("HOST");
     public final static long SUPPRESS_INTERVAL = 120;
-    public static final long MAX_PENDING_TRANSACTIONS_PER_PARTITION =
-            Integer.getInteger("INTERNAL_MAX_PENDING_TRANSACTION_PER_PARTITION", 500);
+    private static final int BACK_PRESSURE_WAIT_TIME = Integer.getInteger("INTERNAL_BACK_PRESSURE_WAIT_TIME", 50);
 
     public interface Callback {
         public void handleResponse(ClientResponse response) throws Exception;
@@ -71,6 +74,8 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
     // Maintain internal connection ids per caller id. This is useful when collecting statistics
     // so that information can be grouped per user of this Connection.
     private final ConcurrentMap<String, Long> m_internalConnectionIds = new NonBlockingHashMap<>();
+    public final Semaphore m_permits =
+        new Semaphore(Integer.getInteger("INTERNAL_MAX_PENDING_TRANSACTION_PER_PARTITION", 500));
 
     private class InternalCallback implements Callback {
 
@@ -119,6 +124,8 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
 
             if (response.getStatus() == ClientResponse.RESPONSE_UNKNOWN) {
                 //Handle failure of transaction due to node kill
+                // JHH: I feel like this needs more explanation. Are we
+                // just restarting the transaction here? Why? Safe?
                 createTransaction(
                         m_kattrs,
                         m_task.getProcName(),
@@ -127,7 +134,8 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
                         m_task,
                         m_user,
                         m_partition,
-                        System.nanoTime());
+                        false,
+                        null);
             }
         }
 
@@ -147,15 +155,6 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
         }
     }
 
-    public long getPendingCount() {
-        return m_callbacks.size();
-    }
-
-    public boolean hasBackPressure() {
-        // 500 default per partition.
-        return (m_callbacks.size() > (m_partitionExecutor.size() * MAX_PENDING_TRANSACTIONS_PER_PARTITION));
-    }
-
     public ClientInterface getClientInterface() {
         return VoltDB.instance().getClientInterface();
     }
@@ -167,10 +166,21 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
             final InternalConnectionStatsCollector statsCollector,
             final StoredProcedureInvocation task,
             final AuthSystem.AuthUser user,
-            final int partition, final long nowNanos) {
-
+            final int partition,
+            final boolean ntPriority,
+            final Function<Integer, Boolean> backPressurePredicate) {
         if (!m_partitionExecutor.containsKey(partition)) {
             m_partitionExecutor.putIfAbsent(partition, CoreUtils.getSingleThreadExecutor("InternalHandlerExecutor - " + partition));
+        }
+
+        if (backPressurePredicate != null) {
+            try {
+                do {
+                    if (m_permits.tryAcquire(BACK_PRESSURE_WAIT_TIME, MILLISECONDS)) {
+                        break;
+                    }
+                } while (backPressurePredicate.apply(partition));
+            } catch (InterruptedException e) {}
         }
 
         final InvocationDispatcher dispatcher = getClientInterface().getDispatcher();
@@ -180,7 +190,6 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
             executor.submit(new Runnable() {
                 @Override
                 public void run() {
-                    kattrs.setBackPressure(hasBackPressure());
                     if (!m_internalConnectionIds.containsKey(kattrs.getName())) {
                         m_internalConnectionIds.putIfAbsent(kattrs.getName(), VoltProtocolHandler.getNextConnectionId());
                     }
@@ -191,10 +200,10 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
                     task.setClientHandle(handle);
                     final InternalCallback cb = new InternalCallback(
                             kattrs, catProc, task, procName, partition, proccb, statsCollector, user, handle);
+
                     m_callbacks.put(handle, cb);
 
-                    ClientResponseImpl r = dispatcher.dispatch(task, kattrs, InternalClientResponseAdapter.this, user);
-                    boolean bval = r == null || r.getStatus() == ClientResponse.SUCCESS;
+                    ClientResponseImpl r = dispatcher.dispatch(task, kattrs, InternalClientResponseAdapter.this, user, null, ntPriority);
                     if (r != null) {
                         try {
                             cb.handleResponse(r);
@@ -202,22 +211,17 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
                             m_logger.error("failed to process dispatch response " + r.getStatusString(), e);
                         } finally {
                             m_callbacks.remove(handle);
+                            m_permits.release();
                         }
-                        return bval;
+                        return r.getStatus() == ClientResponse.SUCCESS;
                     }
 
-                    //Submit the transaction.
-                    if (!bval) {
-                        // Supposedly this will never happen and is OK to ignore from stats collection perspective.
-                        // Hence it is OK that this is not getting reported to callbacks.
-                        m_logger.error("Failed to submit transaction.");
-                        m_callbacks.remove(handle);
-                    }
-                    return bval;
+                    return true;
                 }
             });
         } catch (RejectedExecutionException ex) {
             m_logger.error("Failed to submit transaction to the partition queue.", ex);
+            m_permits.release();
             return false;
         }
 
@@ -276,7 +280,11 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
         } catch (IOException ex) {
             VoltDB.crashLocalVoltDB("enqueue() in InternalClientResponseAdapter throw an exception", true, ex);
         }
+
         final Callback callback = m_callbacks.get(resp.getClientHandle());
+        if (callback == null) {
+            throw new IllegalStateException("Callback was null?");
+        }
         if (!m_partitionExecutor.containsKey(callback.getPartitionId())) {
             m_logger.error("Invalid partition response recieved for sending internal client response.");
             return;
@@ -286,7 +294,6 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
             executor.submit(new Runnable() {
                 @Override
                 public void run() {
-                    callback.getInternalContext().setBackPressure(hasBackPressure());
                     handle();
                 }
 
@@ -297,6 +304,7 @@ public class InternalClientResponseAdapter implements Connection, WriteStream {
                         m_logger.error("Failed to process callback.", ex);
                     } finally {
                         m_callbacks.remove(resp.getClientHandle());
+                        m_permits.release();
                     }
                 }
             });

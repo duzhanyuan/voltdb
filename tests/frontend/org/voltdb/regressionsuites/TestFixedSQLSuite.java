@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -694,6 +694,77 @@ public class TestFixedSQLSuite extends RegressionSuite {
         subTestENG9389();
         subTestENG9533();
         subTestENG9796();
+        subTestENG11256();
+        subTestENG12105();
+        subTestENG12116();
+    }
+
+    private void subTestENG12105() throws Exception {
+        Client client = getClient();
+
+        validateTableOfLongs(client,
+                "insert into eng_12105 values (0, "
+                + "null, 12, 13, 14, "
+                + "15.0, 16.00, "
+                + "'foo', 'foo_inline_max', 'foo_inline', "
+                + "'2016-01-01 00:00:00.000000', "
+                + "x'deadbeef');", new long[][] {{1}});
+
+        validateTableOfLongs(client,
+                "SELECT ALL TINY "
+                + "FROM ENG_12105 T1 "
+                + "INNER JOIN "
+                + "(SELECT DISTINCT VARBIN C2 "
+                + "  FROM ENG_12105 "
+                + "  GROUP BY C2 , SMALL , C2 LIMIT 2 ) T2 "
+                + "ON TINY IS NULL "
+                + "GROUP BY TINY "
+                + "LIMIT 8372 "
+                + "OFFSET 0;", new long[][] {{-128}});
+    }
+
+    private void subTestENG11256() throws Exception {
+        Client client = getClient();
+        validateDMLTupleCount(client, "INSERT INTO R1 VALUES(1, 'A', 12, 0.6)", 1);
+        validateDMLTupleCount(client, "INSERT INTO R1 VALUES(2, 'A', 12, 0.2)", 1);
+        validateDMLTupleCount(client, "INSERT INTO R1 VALUES(3, 'B', 34, 0.0)", 1);
+        validateDMLTupleCount(client, "INSERT INTO R1 VALUES(4, 'B', 34, 0.7)", 1);
+
+        validateDMLTupleCount(client, "INSERT INTO R2 VALUES(5, 'C', 56, 0.8)", 1);
+        validateDMLTupleCount(client, "INSERT INTO R2 VALUES(6, 'C', 56, 0.5)", 1);
+        validateDMLTupleCount(client, "INSERT INTO R2 VALUES(7, 'D', 78, 0.9)", 1);
+        validateDMLTupleCount(client, "INSERT INTO R2 VALUES(8, 'D', 78, 0.3)", 1);
+
+        String[] filterOps = new String[] { " <> ", " IS DISTINCT FROM " };
+        for (String filterOp : filterOps) {
+            long expected = " <> ".equals(filterOp) ? 4 : 0;
+            String query;
+            String start = "SELECT count(*) FROM R1 PARENT WHERE DESC NOT IN (";
+            String end = " ON LHS.ID = RHS.ID " +
+                    "WHERE LHS.ID " + filterOp + " PARENT.NUM);";
+            // Zero result rows because values from R1 always have matches in
+            // R1 JOIN R1.
+
+            query = start +
+                    "SELECT LHS.DESC FROM R1 LHS FULL JOIN R1 RHS " + end;
+            validateTableOfLongs(client, query, new long[][] {{0}});
+            query = start +
+                    "SELECT LHS.DESC FROM R1 LHS FULL JOIN R2 RHS " + end;
+            validateTableOfLongs(client, query, new long[][] {{0}});
+            // An IS DISTINCT FROM bug in the HSQL backend causes it
+            // to always to return 0 rows,
+            // which is only correct for <>.
+            // Remove this condition when ENG-11256 is fixed.
+            if (isHSQL() && expected != 0) {
+                query = start +
+                        "SELECT LHS.DESC FROM R2 LHS FULL JOIN R1 RHS " + end;
+                validateTableOfLongs(client, query, new long[][] {{expected}});
+            }
+            query = start +
+                    "SELECT LHS.DESC FROM R2 LHS FULL JOIN R2 RHS " + end;
+            validateTableOfLongs(client, query, new long[][] {{4}});
+        }
+        truncateTables(client, new String[]{"R1", "R2"});
     }
 
     private void subTestTicket196() throws IOException, ProcCallException
@@ -2657,6 +2728,92 @@ public class TestFixedSQLSuite extends RegressionSuite {
             20, 11, "bar", 99.0, 12, "baz", 111.0,
             20, 11, "bar", 99.0, 12, "baz", 111.0
             }}, vt);
+        truncateTables(client, new String[] {"p1", "r1", "r2"});
+    }
+
+    private void subTestENG12116() throws Exception {
+        Client client = getClient();
+        // This is essentially the case which was failing
+        // in ENG-12116.  Note that the select statement's
+        // expressions don't depend on the derived table it
+        // selects from.
+        String SQL = "SELECT SIN(0) FROM ( SELECT DISTINCT * FROM P1 AS O, R1 AS I) AS TTT;";
+        client.callProcedure("p1.Insert", 10, "foo", 20,  40.0);
+        client.callProcedure("r1.Insert", 11, "bar", 30,  99.0);
+        VoltTable vt;
+        vt = client.callProcedure("@AdHoc", SQL).getResults()[0];
+        assertApproximateContentOfTable(new Object[][] {{ 0.0 }}, vt, 1.0e-7);
+        SQL = "SELECT * FROM ( SELECT DISTINCT * FROM P1 AS O, R1 AS I WHERE O.ID+1 = I.ID) AS TTT;";
+        client.callProcedure("p1.Insert", 20, "goo", 21,  41.0);
+        client.callProcedure("r1.Insert", 22, "gar", 31,  99.9);
+        vt = client.callProcedure("@AdHoc", SQL).getResults()[0];
+        // See if we are actually getting the columns
+        // right in the plan.  Before ENG-12116 was fixed we would
+        // sometimes choose the wrong columns in a subquery
+        // with select distinct when the column names were
+        // identical, as is the case here.  With this test
+        // we can see that the indexes are correct, since the
+        // values are different.
+        assertContentOfTable(new Object[][] {{ 10, "foo", 20, 40.0, 11, "bar", 30, 99.0 }}, vt);
+    }
+
+    public void testExistsBugEng12204() throws Exception {
+        Client client = getClient();
+
+        client.callProcedure("@AdHoc", "insert into p1 values (0, 'foo', 0, 0.1);");
+        client.callProcedure("@AdHoc", "insert into r1 values (0, 'foo', 0, 0.1);");
+        client.callProcedure("@AdHoc", "insert into r1 values (1, 'baz', 1, 1.1);");
+
+        VoltTable vt;
+
+        // Simplified version of query that caused a crash
+        vt = client.callProcedure("@AdHoc",
+                "SELECT * "
+                        + "FROM P1 "
+                        + "WHERE EXISTS ("
+                        + "  SELECT SUM(ID) "
+                        + "  FROM R1 "
+                        + "  WHERE DESC = 'bar' "
+                        + "  GROUP BY NUM)").getResults()[0];
+        assertContentOfTable(new Object[][] {}, vt);
+
+        // Subquery returns zero rows, so NOT EXISTS returns true
+        vt = client.callProcedure("@AdHoc",
+                "SELECT * "
+                        + "FROM P1 "
+                        + "WHERE NOT EXISTS ("
+                        + "  SELECT SUM(ID) "
+                        + "  FROM R1 "
+                        + "  WHERE DESC = 'bar' "
+                        + "  GROUP BY NUM) "
+                        + "ORDER BY 1, 2, 3, 4").getResults()[0];
+        assertContentOfTable(new Object[][] {{0, "foo", 0, 0.1}}, vt);
+
+        // WHERE predicate in inner query sometimes returns true, sometimes false
+        // (bug occurred when predicate was always false and pass through values were
+        // uninitialized)
+        vt = client.callProcedure("@AdHoc",
+                "SELECT * "
+                        + "FROM P1 "
+                        + "WHERE EXISTS ("
+                        + "  SELECT SUM(ID) "
+                        + "  FROM R1 "
+                        + "  WHERE DESC = 'baz' "
+                        + "  GROUP BY NUM) "
+                        + "ORDER BY 1, 2, 3, 4").getResults()[0];
+        assertContentOfTable(new Object[][] {{0, "foo", 0, 0.1}}, vt);
+
+        // The original query
+        vt = client.callProcedure("@AdHoc",
+                "SELECT * "
+                        + "FROM P1 T2 "
+                        + "WHERE NOT EXISTS ("
+                        + "  SELECT SUM(COT(ID)) "
+                        + "  FROM R1 T2 "
+                        + "  WHERE DESC <> DESC "
+                        + "  GROUP BY NUM, NUM) "
+                        + "OFFSET 9;").getResults()[0];
+        assertContentOfTable(new Object[][] {}, vt);
     }
 
     //
@@ -2708,12 +2865,12 @@ public class TestFixedSQLSuite extends RegressionSuite {
         builder.addServerConfig(config);
         // end of normally disabled section */
 
-        // CONFIG #2: HSQL
+        //* CONFIG #2: HSQL
         config = new LocalCluster("fixedsql-hsql.jar", 1, 1, 0, BackendTarget.HSQLDB_BACKEND);
         success = config.compile(project);
         assertTrue(success);
         builder.addServerConfig(config);
-
+        // end of HSQDB config */
         return builder;
     }
 }

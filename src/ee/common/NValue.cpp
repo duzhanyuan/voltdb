@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -131,7 +131,7 @@ std::string NValue::debug() const {
     std::ostringstream buffer;
     std::string out_val;
     const char* ptr;
-    int64_t addr;
+
     buffer << getTypeName(type) << "::";
     switch (type) {
     case VALUE_TYPE_BOOLEAN:
@@ -156,20 +156,18 @@ std::string NValue::debug() const {
     {
         int32_t length;
         ptr = getObject_withoutNull(&length);
-        addr = reinterpret_cast<int64_t>(ptr);
         out_val = std::string(ptr, length);
         buffer << "[" << length << "]";
-        buffer << "\"" << out_val << "\"[@" << addr << "]";
+        buffer << "\"" << out_val << "\"[@" << static_cast<const void*>(ptr) << "]";
         break;
     }
     case VALUE_TYPE_VARBINARY:
     {
         int32_t length;
         ptr = getObject_withoutNull(&length);
-        addr = reinterpret_cast<int64_t>(ptr);
         out_val = std::string(ptr, length);
         buffer << "[" << length << "]";
-        buffer << "-bin[@" << addr << "]";
+        buffer << "-bin[@" << static_cast<const void*>(ptr) << "]";
         break;
     }
     case VALUE_TYPE_DECIMAL:
@@ -503,6 +501,10 @@ void NValue::castAndSortAndDedupArrayForInList(const ValueType outputType, std::
 void NValue::streamTimestamp(std::stringstream& value) const
 {
     int64_t epoch_micros = getTimestamp();
+    if (epochMicrosOutOfRange(epoch_micros)) {
+        throwOutOfRangeTimestampInput("CAST");
+    }
+
     boost::gregorian::date as_date;
     boost::posix_time::time_duration as_time;
     micros_to_date_and_time(epoch_micros, as_date, as_time);

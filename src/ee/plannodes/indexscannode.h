@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -56,9 +56,17 @@ namespace voltdb {
 class IndexScanPlanNode : public AbstractScanPlanNode {
 public:
     IndexScanPlanNode()
-        : m_lookup_type(INDEX_LOOKUP_TYPE_EQ)
+        : m_target_index_name()
+        , m_searchkey_expressions()
+        , m_compare_not_distinct()
+        , m_end_expression()
+        , m_initial_expression()
+        , m_lookup_type(INDEX_LOOKUP_TYPE_EQ)
         , m_sort_direction(SORT_DIRECTION_TYPE_INVALID)
-    { }
+        , m_skip_null_predicate()
+    {
+    }
+
     ~IndexScanPlanNode();
     PlanNodeType getPlanNodeType() const;
     std::string debugInfo(const std::string &spacer) const;
@@ -71,6 +79,9 @@ public:
 
     const std::vector<AbstractExpression*>& getSearchKeyExpressions() const
     { return m_searchkey_expressions; }
+
+    const std::vector<bool>& getCompareNotDistinctFlags() const
+    { return m_compare_not_distinct; }
 
     AbstractExpression* getEndExpression() const { return m_end_expression.get(); }
 
@@ -86,6 +97,11 @@ protected:
 
     // TODO: Document
     OwningExpressionVector m_searchkey_expressions;
+
+    // If the search key expression is actually a "not distinct" expression,
+    //   we do not want the executor to skip null candidates.
+    // This flag vector will instruct the executor the correct behavior for null skipping. (ENG-11096)
+    std::vector<bool> m_compare_not_distinct;
 
     // TODO: Document
     boost::scoped_ptr<AbstractExpression> m_end_expression;

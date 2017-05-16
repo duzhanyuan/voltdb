@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,6 +17,7 @@
 
 package org.voltdb;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -260,8 +261,8 @@ public class TableHelper {
         public VoltTable table;
         public ArrayList<IndexRep> indexes = new ArrayList<IndexRep>();
 
-        public String ddl() {
-            String ddl = TableHelper.ddlForTable(table) + "\n";
+        public String ddl(boolean isStream) {
+            String ddl = TableHelper.ddlForTable(table, isStream) + "\n";
             for (int i = 0; i < indexes.size(); i++) {
                 ddl += indexes.get(i).ddl("IDX" + String.valueOf(i)) + "\n";
             }
@@ -992,7 +993,7 @@ public class TableHelper {
      * Get the DDL for a table.
      * Only works with tables created with TableHelper.quickTable(..) above.
      */
-    public static String ddlForTable(VoltTable table) {
+    public static String ddlForTable(VoltTable table, boolean isStream) {
         assert(table.m_extraMetadata != null);
 
         // for each column, one line
@@ -1001,7 +1002,16 @@ public class TableHelper {
             colLines[i] = getDDLColumnDefinition(table, table.m_extraMetadata.originalColumnInfos[i]);
         }
 
-        String s = "CREATE TABLE " + table.m_extraMetadata.name + " (\n  ";
+        String s = (isStream ? "CREATE STREAM " : "CREATE TABLE ") + table.m_extraMetadata.name;
+        if (isStream) {
+            // partition this table if need be
+            if (table.m_extraMetadata.partitionColIndex != -1) {
+                s += String.format("PARTITION ON COLUMN %s",
+                        table.m_extraMetadata.name,
+                        table.m_extraMetadata.originalColumnInfos[table.m_extraMetadata.partitionColIndex].name);
+            }
+        }
+        s += " (\n  ";
         s += StringUtils.join(colLines, ",\n  ");
 
         // pkey line
@@ -1018,11 +1028,13 @@ public class TableHelper {
 
         s += "\n);";
 
-        // partition this table if need be
-        if (table.m_extraMetadata.partitionColIndex != -1) {
-            s += String.format("\nPARTITION TABLE %s ON COLUMN %s;",
-                    table.m_extraMetadata.name,
-                    table.m_extraMetadata.originalColumnInfos[table.m_extraMetadata.partitionColIndex].name);
+        if (!isStream) {
+            // partition this table if need be
+            if (table.m_extraMetadata.partitionColIndex != -1) {
+                s += String.format("\nPARTITION TABLE %s ON COLUMN %s;",
+                        table.m_extraMetadata.name,
+                        table.m_extraMetadata.originalColumnInfos[table.m_extraMetadata.partitionColIndex].name);
+            }
         }
 
         return s;
@@ -1528,5 +1540,33 @@ public class TableHelper {
                 throw new RuntimeException("TableHelper.load failed.");
             }
         }
+    }
+
+    public static ByteBuffer getBackedBuffer(VoltTable table) {
+        // This is an unsafe version of VoltTable.getBuffer() because it does not instantiate a new ByteBuffer
+        table.m_buffer.position(0);
+        table.m_readOnly = true;
+        assert(table.m_buffer.remaining() == table.m_buffer.limit());
+        return table.m_buffer;
+    }
+
+    public static VoltTable[] convertBackedBufferToTables(ByteBuffer fullBacking, int batchSize) {
+        final VoltTable[] results = new VoltTable[batchSize];
+        for (int i = 0; i < batchSize; ++i) {
+            final int numdeps = fullBacking.getInt(); // number of dependencies for this frag
+            assert(numdeps == 1);
+            @SuppressWarnings("unused")
+            final
+            int depid = fullBacking.getInt(); // ignore the dependency id
+            final int tableSize = fullBacking.getInt();
+            // reasonableness check
+            assert(tableSize < 50000000);
+            final ByteBuffer tableBacking = fullBacking.slice();
+            fullBacking.position(fullBacking.position() + tableSize);
+            tableBacking.limit(tableSize);
+
+            results[i] = PrivateVoltTableFactory.createVoltTableFromBuffer(tableBacking, true);
+        }
+        return results;
     }
 }

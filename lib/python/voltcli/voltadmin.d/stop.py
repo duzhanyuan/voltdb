@@ -1,5 +1,5 @@
 # This file is part of VoltDB.
-# Copyright (C) 2008-2016 VoltDB Inc.
+# Copyright (C) 2008-2017 VoltDB Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -17,59 +17,18 @@
 # Stop a node. Written to easily support multiple, but configured for
 # a single host for now.
 
-
-class Host(dict):
-
-    def __init__(self, id, abort_func):
-        self.id = id
-        self.abort_func = abort_func
-
-    # Provide pseudo-attributes for dictionary items with error checking
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except IndexError:
-            self.abort_func('Attribute "%s" not present for host.' % name)
-
-
-class Hosts(object):
-
-    def __init__(self, abort_func):
-        self.hosts_by_id = {}
-        self.abort_func = abort_func
-
-    def update(self, host_id_raw, prop_name_raw, value_raw):
-        host_id = int(host_id_raw)
-        prop_name = prop_name_raw.lower()
-        value = value_raw
-        if prop_name.endswith('port'):
-            value = int(value)
-        self.hosts_by_id.setdefault(host_id, Host(host_id, self.abort_func))[prop_name] = value
-
-    def get_target_and_connection_host(self, host_name):
-        """
-        Find an arbitrary host that isn't the one being stopped.
-        Returns a tuple with connection and target host objects.
-        """
-        connection_host = None
-        target_host = None
-        for host in self.hosts_by_id.values():
-            if host.hostname == host_name:
-                target_host = host
-            elif connection_host is None:
-                connection_host = host
-            if not connection_host is None and not target_host is None:
-                break
-        return (target_host, connection_host)
-
+from voltcli.hostinfo import Host
+from voltcli.hostinfo import Hosts
+from voltcli import utility
 
 @VOLT.Command(
     bundles = VOLT.AdminBundle(),
     description = 'Stop one host of a running VoltDB cluster.',
     arguments = (
-        VOLT.StringArgument('target_host', 'the target HOST name or address'),
+        VOLT.StringArgument('target_host', 'the target hostname[:port] or address[:port]. (default port=3021)'),
     ),
 )
+
 def stop(runner):
 
     # Exec @SystemInformation to find out about the cluster.
@@ -83,9 +42,13 @@ def stop(runner):
         hosts.update(tuple[0], tuple[1], tuple[2])
 
     # Connect to an arbitrary host that isn't being stopped.
-    (thost, chost) = hosts.get_target_and_connection_host(runner.opts.target_host)
+    defaultport = 3021
+    min_hosts = 1
+    max_hosts = 1
+    target_host = utility.parse_hosts(runner.opts.target_host, min_hosts, max_hosts, defaultport)[0]
+    (thost, chost) = hosts.get_target_and_connection_host(target_host.host, target_host.port)
     if thost is None:
-        runner.abort('Host not found in cluster: %s' % runner.opts.target_host)
+        runner.abort('Host not found in cluster: %s:%d' % (target_host.host, target_host.port))
     if chost is None:
         runner.abort('The entire cluster is being stopped, use "shutdown" instead.')
 
@@ -93,12 +56,13 @@ def stop(runner):
         user_info = ', user: %s' % runner.opts.username
     else:
         user_info = ''
-    runner.info('Connecting to host: %s:%d%s' % (chost.hostname, chost.adminport, user_info))
-    runner.voltdb_connect(chost.hostname, chost.adminport,
+    runner.info('Connecting to %s:%d%s (%s) to issue "stop" command' %
+                (chost.get_admininterface(), chost.adminport, user_info, chost.hostname))
+    runner.voltdb_connect(chost.get_admininterface(), chost.adminport,
                           runner.opts.username, runner.opts.password)
 
     # Stop the requested host using exec @StopNode HOST_ID
-    runner.info('Stopping host %d: %s' % (thost.id, thost.hostname))
+    runner.info('Stopping host %d: %s:%s' % (thost.id, thost.hostname, thost.internalport))
     if not runner.opts.dryrun:
         response = runner.call_proc('@StopNode',
                                     [VOLT.FastSerializer.VOLTTYPE_INTEGER],

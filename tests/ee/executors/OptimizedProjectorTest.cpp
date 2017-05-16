@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -53,7 +53,7 @@
 #include "storage/temptable.h"
 
 
-static int64_t NUM_ROWS = 10000;
+static int64_t NUM_ROWS = 100;
 static int64_t NUM_COLS = 32;
 
 namespace voltdb {
@@ -527,7 +527,6 @@ int main(int argc, char* argv[]) {
                                                     wantNoQuantum,  // undoQuantum
                                                     topless,        // topend
                                                     testPool.get(), // tempStringPool
-                                                    NULL,           // params
                                                     NULL,           // engine
                                                     "",             // hostname
                                                     0,              // hostId

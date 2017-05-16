@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -118,7 +118,7 @@ public class TestPlansScalarSubQueries extends PlannerTestCase {
 
     // negative tests not to support subquery inside of aggregate function
     public void testSelectScalarInAggregation() {
-        String sql, errorMsg = "SQL Aggregate with subquery expression is not allowed.";
+        String sql, errorMsg = "SQL Aggregate function calls with subquery expression arguments are not allowed.";
 
         // non-correlated
         sql = "select franchise_id, sum((select count(category) from store_types where type_id = 3)) as stores_in_category_AdHoc "

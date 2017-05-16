@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -66,17 +66,19 @@ public class VoltCompilerUtils
             return null;
         }
 
-        byte[] bytes = InMemoryJarfile.readFromJarEntry(jarIn, catEntry);
+        byte[] bytes = InMemoryJarfile.readFromJarEntry(jarIn);
 
         return new String(bytes, "UTF-8");
+    }
+
+    private static String classNameToPackagePath(String className) {
+        return className.replace('.', '/') + ".class";
     }
 
     public static boolean addClassToJar(InMemoryJarfile jarOutput, final Class<?> cls)
             throws IOException
     {
-        String packagePath = cls.getName();
-        packagePath = packagePath.replace('.', '/');
-        packagePath += ".class";
+        String packagePath = classNameToPackagePath(cls.getName());
 
         String realName = cls.getName();
         realName = realName.substring(realName.lastIndexOf('.') + 1);
@@ -94,14 +96,18 @@ public class VoltCompilerUtils
         return true;
     }
 
+    public static boolean containsClassName(InMemoryJarfile jarOutput, String className) {
+        String packagePath = classNameToPackagePath(className);
+        return jarOutput.get(packagePath) != null;
+    }
+
     public static byte[] getClassAsBytes(final Class<?> c) throws IOException {
 
         ClassLoader cl = c.getClassLoader();
         if (cl == null) {
             cl = Thread.currentThread().getContextClassLoader();
         }
-
-        String classAsPath = c.getName().replace('.', '/') + ".class";
+        String classAsPath = classNameToPackagePath(c.getName());
 
         if (cl instanceof JarLoader) {
             InMemoryJarfile memJar = ((JarLoader) cl).getInMemoryJarfile();

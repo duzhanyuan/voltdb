@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.lang.Thread.State;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -463,6 +464,11 @@ public class ElasticHashinator extends TheHashinator {
         }
 
         return ranges;
+    }
+
+    @Override
+    public boolean pIsPristine() {
+        return Arrays.equals(((ElasticHashinator)m_pristineHashinator).m_configBytes.get(), m_configBytes.get());
     }
 
     /**

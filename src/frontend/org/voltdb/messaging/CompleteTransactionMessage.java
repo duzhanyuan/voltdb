@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -22,6 +22,7 @@ import java.nio.ByteBuffer;
 
 import org.voltcore.messaging.TransactionInfoBaseMessage;
 import org.voltcore.utils.CoreUtils;
+import org.voltdb.iv2.TxnEgo;
 
 public class CompleteTransactionMessage extends TransactionInfoBaseMessage
 {
@@ -140,7 +141,9 @@ public class CompleteTransactionMessage extends TransactionInfoBaseMessage
         sb.append("COMPLETE_TRANSACTION (FROM COORD: ");
         sb.append(CoreUtils.hsIdToString(m_coordinatorHSId));
         sb.append(") FOR TXN ");
-        sb.append(m_txnId);
+        sb.append(TxnEgo.txnIdToString(m_txnId));
+        sb.append("\n SP HANDLE: ");
+        sb.append(TxnEgo.txnIdToString(getSpHandle()));
         sb.append("\n  FLAGS: ").append(m_flags);
 
         sb.append("\n  HASH: " + String.valueOf(m_hash));

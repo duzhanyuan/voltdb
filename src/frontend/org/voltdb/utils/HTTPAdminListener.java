@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -19,11 +19,13 @@ package org.voltdb.utils;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.URL;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -37,10 +39,10 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.xml.bind.annotation.XmlAttribute;
 
-import org.apache.commons.lang3.StringUtils;
 import org.apache.http.entity.ContentType;
 import org.codehaus.jackson.JsonFactory;
 import org.codehaus.jackson.JsonGenerator;
+import org.codehaus.jackson.JsonParseException;
 import org.codehaus.jackson.annotate.JsonIgnore;
 import org.codehaus.jackson.annotate.JsonProperty;
 import org.codehaus.jackson.annotate.JsonPropertyOrder;
@@ -63,6 +65,8 @@ import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.eclipse.jetty.server.handler.ContextHandler;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
+import org.eclipse.jetty.server.handler.ResourceHandler;
+import org.eclipse.jetty.server.handler.gzip.GzipHandler;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.json_voltpatches.JSONArray;
@@ -81,8 +85,6 @@ import org.voltdb.client.SyncCallback;
 import org.voltdb.common.Permission;
 import org.voltdb.compiler.deploymentfile.DeploymentType;
 import org.voltdb.compiler.deploymentfile.ExportType;
-import org.voltdb.compiler.deploymentfile.HttpsType;
-import org.voltdb.compiler.deploymentfile.KeyOrTrustStoreType;
 import org.voltdb.compiler.deploymentfile.PathsType;
 import org.voltdb.compiler.deploymentfile.ServerExportEnum;
 import org.voltdb.compiler.deploymentfile.UsersType;
@@ -92,20 +94,32 @@ import org.voltdb.compilereport.ReportMaker;
 import com.google_voltpatches.common.base.Charsets;
 import com.google_voltpatches.common.base.Throwables;
 import com.google_voltpatches.common.io.Resources;
+import com.google_voltpatches.common.net.HostAndPort;
 
 public class HTTPAdminListener {
 
     private static final VoltLogger m_log = new VoltLogger("HOST");
     public static final String REALM = "VoltDBRealm";
-    static final String jsonContentType = ContentType.APPLICATION_JSON.toString();
+
+    // static resources
+    private static final String RESOURCE_BASE = "dbmonitor";
+    private static final String CSS_TARGET = "css";
+    private static final String IMAGES_TARGET = "images";
+    private static final String JS_TARGET = "js";
+
+    // content types
+    private static final String JSON_CONTENT_TYPE = ContentType.APPLICATION_JSON.toString();
+    private static final String HTML_CONTENT_TYPE = "text/html;charset=utf-8";
 
     Server m_server;
     HTTPClientInterface httpClientInterface = new HTTPClientInterface();
     final boolean m_jsonEnabled;
 
-    Map<String, String> m_htmlTemplates = new HashMap<String, String>();
+    Map<String, String> m_htmlTemplates = new HashMap<>();
     final boolean m_mustListen;
     final DeploymentRequestHandler m_deploymentHandler;
+
+    final String m_publicIntf;
 
     // ObjectMapper is thread safe, and uses a lot of memory to cache
     // class specific serializers and deserializers. Use JSR-133
@@ -145,6 +159,11 @@ public class HTTPAdminListener {
 
         protected String getHostHeader() {
             if (m_hostHeader != null) {
+                return m_hostHeader;
+            }
+
+            if (!m_publicIntf.isEmpty()) {
+                m_hostHeader = m_publicIntf;
                 return m_hostHeader;
             }
 
@@ -214,6 +233,14 @@ public class HTTPAdminListener {
                     baseRequest.setHandled(false);
                     return;
                 }
+
+                if (baseRequest.getRequestURI().contains(File.separator + CSS_TARGET) ||
+                        baseRequest.getRequestURI().contains(File.separator + IMAGES_TARGET) ||
+                        baseRequest.getRequestURI().contains(File.separator + JS_TARGET)) {
+                    // will be processed by individual resource handler
+                    return;
+                }
+
                 //Send old /studio back to "/"
                 if (baseRequest.getRequestURI().contains("/studio")) {
                     response.sendRedirect("/");
@@ -240,7 +267,7 @@ public class HTTPAdminListener {
                 if (target.endsWith("/index.htm")) {
 
                     // set the headers
-                    response.setContentType("text/html;charset=utf-8");
+                    response.setContentType(HTML_CONTENT_TYPE);
                     response.setStatus(HttpServletResponse.SC_OK);
                     baseRequest.setHandled(true);
 
@@ -253,21 +280,23 @@ public class HTTPAdminListener {
                     }
                 }
                 else {
-                    // set the mime type in a giant hack
-                    String mime = "text/html;charset=utf-8";
-                    if (target.endsWith(".js"))
-                        mime = "application/x-javascript;charset=utf-8";
-                    if (target.endsWith(".css"))
-                        mime = "text/css;charset=utf-8";
-                    if (target.endsWith(".gif"))
-                        mime = "image/gif";
-                    if (target.endsWith(".png"))
-                        mime = "image/png";
-                    if ((target.endsWith(".jpg")) || (target.endsWith(".jpeg")))
-                        mime = "image/jpeg";
+                    // js, css, images handled by resource handler. files corresponding to it
+                    // should be placed in the specific location
+                    assert !target.endsWith(".js") : " Javascript should in the resource path "
+                        + RESOURCE_BASE + File.separator + JS_TARGET;
+                    assert !target.endsWith(".css") : " Stylesheet should in the resource path "
+                        + RESOURCE_BASE + File.separator + CSS_TARGET;
+                    assert !target.endsWith(".gif") : target + " should in the resource path "
+                        + RESOURCE_BASE + File.separator + IMAGES_TARGET;
+                    assert !target.endsWith(".png") : target + " should in the resource path "
+                        + RESOURCE_BASE + File.separator + IMAGES_TARGET;
+                    assert !target.endsWith(".jpg") : target + " should in the resource path "
+                        + RESOURCE_BASE + File.separator + IMAGES_TARGET;
+                    assert !target.endsWith(".jpeg") : target + "image should in the resource path "
+                        + RESOURCE_BASE + File.separator + IMAGES_TARGET;
 
                     // set the headers
-                    response.setContentType(mime);
+                    response.setContentType(HTML_CONTENT_TYPE);
                     response.setStatus(HttpServletResponse.SC_OK);
                     baseRequest.setHandled(true);
 
@@ -322,6 +351,46 @@ public class HTTPAdminListener {
 
     }
 
+    /*
+     * Utility handler class to enable caching of static resources.
+     * The static resources are package in jar file
+     */
+    class CacheStaticResourceHandler extends ResourceHandler {
+        // target Directory location for folder w.r.t. resource base folder - dbmonitor
+        public CacheStaticResourceHandler(final String target, int maxAge) {
+            super();
+            final String path = VoltDB.class.getResource(RESOURCE_BASE + File.separator + target).toExternalForm();
+            if (m_log.isDebugEnabled()) {
+                m_log.debug("Resource base path: " + path);
+            }
+            setResourceBase(path);
+            // set etags along with cache age so that the http client's requests for fetching the
+            // static resource is rate limited. Without cache age, client will requesting for
+            // static more than needed
+            setCacheControl("max-age=" + maxAge +", private");
+            setEtags(true);
+        }
+
+        @SuppressWarnings("unused")
+        private CacheStaticResourceHandler() {
+            super();
+            assert false : "Target location for static resource is needed to initialize the resource handler";
+        }
+
+        @Override
+        public void handle(String target,
+                           Request baseRequest,
+                           HttpServletRequest request,
+                           HttpServletResponse response)
+                           throws IOException, ServletException {
+            super.handle(target, baseRequest, request, response);
+            if (!baseRequest.isHandled() && m_log.isDebugEnabled()) {
+                m_log.debug("Failed to process static resource: " + Paths.get(getResourceBase()));
+            }
+        }
+
+    }
+
     //This is a wrapper to generate JSON for profile of authenticated user.
     private final class Profile {
         private final String user;
@@ -357,22 +426,34 @@ public class HTTPAdminListener {
             super.handle(target, baseRequest, request, response);
             if (baseRequest.isHandled()) return;
             //jsonp is specified when response is expected to go to javascript function.
-            String jsonp = request.getParameter("jsonp");
+            String jsonp = request.getParameter(HTTPClientInterface.JSONP);
             AuthenticationResult authResult = null;
             try {
-                response.setContentType(jsonContentType);
+                response.setContentType(JSON_CONTENT_TYPE);
+                if (!HTTPClientInterface.validateJSONP(jsonp, baseRequest, response)) {
+                    return;
+                }
                 response.setStatus(HttpServletResponse.SC_OK);
                 authResult = authenticate(baseRequest);
                 if (!authResult.isAuthenticated()) {
                     response.getWriter().print(buildClientResponse(jsonp, ClientResponse.UNEXPECTED_FAILURE, authResult.m_message));
-                } else {
-                    if (jsonp != null) {
-                        response.getWriter().write(jsonp + "(");
-                    }
-                    m_mapper.writeValue(response.getWriter(), new Profile(authResult.m_user, authResult.m_perms));
-                    if (jsonp != null) {
-                        response.getWriter().write(")");
-                    }
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+
+                if (!target.equals("/")) {
+                    response.getWriter().print(buildClientResponse(jsonp, ClientResponse.UNEXPECTED_FAILURE, "Resource not found"));
+                    response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                if (jsonp != null) {
+                    response.getWriter().write(jsonp + "(");
+                }
+                m_mapper.writeValue(response.getWriter(), new Profile(authResult.m_user, authResult.m_perms));
+                if (jsonp != null) {
+                    response.getWriter().write(")");
                 }
                 baseRequest.setHandled(true);
             } catch (Exception ex) {
@@ -440,7 +521,7 @@ public class HTTPAdminListener {
         //Get deployment from catalog context
         private DeploymentType getDeployment() {
             //If running with new verbs add runtime paths.
-            DeploymentType dt = updateRuntimeDeploymentPaths(getCatalogContext().getDeployment());
+            DeploymentType dt = CatalogUtil.updateRuntimeDeploymentPaths(getCatalogContext().getDeployment());
             return dt;
         }
 
@@ -486,28 +567,36 @@ public class HTTPAdminListener {
             if (baseRequest.isHandled()) return;
 
             //jsonp is specified when response is expected to go to javascript function.
-            String jsonp = request.getParameter("jsonp");
+            String jsonp = request.getParameter(HTTPClientInterface.JSONP);
             AuthenticationResult authResult = null;
             try {
-                response.setContentType(jsonContentType);
+                response.setContentType(JSON_CONTENT_TYPE);
+                if (!HTTPClientInterface.validateJSONP(jsonp, baseRequest, response)) {
+                    return;
+                }
                 response.setStatus(HttpServletResponse.SC_OK);
 
                 //Requests require authentication.
                 authResult = authenticate(baseRequest);
                 if (!authResult.isAuthenticated()) {
                     response.getWriter().print(buildClientResponse(jsonp, ClientResponse.UNEXPECTED_FAILURE, authResult.m_message));
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     baseRequest.setHandled(true);
                     return;
                 }
                 //Authenticated but has no permissions.
                 if (!authResult.m_authUser.hasPermission(Permission.ADMIN)) {
                     response.getWriter().print(buildClientResponse(jsonp, ClientResponse.UNEXPECTED_FAILURE, "Permission denied"));
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     baseRequest.setHandled(true);
                     return;
                 }
 
+                if (!target.endsWith("/")) { // the URI may or may not end with /
+                    target += "/";
+                }
                 //Authenticated and has ADMIN permission
-                if (baseRequest.getRequestURI().contains("/download")) {
+                if (target.equals("/download/")) {
                     //Deployment xml is text/xml
                     response.setContentType("text/xml;charset=utf-8");
                     DeploymentType dt = CatalogUtil.shallowClusterAndPathsClone(this.getDeployment());
@@ -515,7 +604,7 @@ public class HTTPAdminListener {
                     dt.getCluster().setHostcount(getCatalogContext().getClusterSettings().hostcount());
 
                     response.getWriter().write(CatalogUtil.getDeployment(dt, true));
-                } else if (baseRequest.getRequestURI().contains("/users")) {
+                } else if (target.startsWith("/users/")) { // username may be passed in after the / (not as a param)
                     if (request.getMethod().equalsIgnoreCase("POST")) {
                         handleUpdateUser(jsonp, target, baseRequest, request, response, authResult);
                     } else if (request.getMethod().equalsIgnoreCase("PUT")) {
@@ -525,13 +614,14 @@ public class HTTPAdminListener {
                     } else {
                         handleGetUsers(jsonp, target, baseRequest, request, response);
                     }
-                } else if (baseRequest.getRequestURI().contains("/export/type")) {
+                } else if (target.equals("/export/types/")) {
                     handleGetExportTypes(jsonp, response);
-                } else {
+                } else if (target.equals("/")) { // just deployment
                     if (request.getMethod().equalsIgnoreCase("POST")) {
-                        handleUpdateDeployment(jsonp, target, baseRequest, request, response, authResult);
+                        handleUpdateDeployment(jsonp, baseRequest, request, response, authResult);
                     } else {
                         //non POST
+                        response.setCharacterEncoding("UTF-8");
                         if (jsonp != null) {
                             response.getWriter().write(jsonp + "(");
                         }
@@ -544,15 +634,18 @@ public class HTTPAdminListener {
                             response.getWriter().write(")");
                         }
                     }
+                } else {
+                    response.getWriter().print(buildClientResponse(jsonp, ClientResponse.UNEXPECTED_FAILURE, "Resource not found"));
+                    response.setStatus(HttpServletResponse.SC_NOT_FOUND);
                 }
                 baseRequest.setHandled(true);
             } catch (Exception ex) {
-              logger.info("Not servicing url: " + baseRequest.getRequestURI() + " Details: "+ ex.getMessage(), ex);
+                logger.info("Not servicing url: " + baseRequest.getRequestURI() + " Details: "+ ex.getMessage(), ex);
             }
         }
 
         //Update the deployment
-        public void handleUpdateDeployment(String jsonp, String target,
+        public void handleUpdateDeployment(String jsonp,
                            Request baseRequest,
                            HttpServletRequest request,
                            HttpServletResponse response, AuthenticationResult ar)
@@ -560,6 +653,7 @@ public class HTTPAdminListener {
             String deployment = request.getParameter("deployment");
             if (deployment == null || deployment.length() == 0) {
                 response.getWriter().print(buildClientResponse(jsonp, ClientResponse.UNEXPECTED_FAILURE, "Failed to get deployment information."));
+                response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
                 return;
             }
             try {
@@ -592,8 +686,13 @@ public class HTTPAdminListener {
                     response.getWriter().print(HTTPClientInterface.asJsonp(jsonp, r.toJSONString()));
                 }
                 baseRequest.setHandled(true);
+            } catch(JsonParseException e) {
+                response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                response.getWriter().print(buildClientResponse(jsonp, ClientResponse.UNEXPECTED_FAILURE, "Unparsable JSON"));
+                baseRequest.setHandled(true);
             } catch (Exception ex) {
                 logger.error("Failed to update deployment from API", ex);
+                response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
                 response.getWriter().print(buildClientResponse(jsonp, ClientResponse.UNEXPECTED_FAILURE, Throwables.getStackTraceAsString(ex)));
                 baseRequest.setHandled(true);
             }
@@ -793,13 +892,13 @@ public class HTTPAdminListener {
                     response.getWriter().write(jsonp + "(");
                 }
                 if (getDeployment().getUsers() != null) {
-                    List<IdUser> id = new ArrayList<IdUser>();
+                    List<IdUser> id = new ArrayList<>();
                     for(UsersType.User u : getDeployment().getUsers().getUser()) {
                         id.add(new IdUser(u, getHostHeader()));
                     }
                     mapper.writeValue(response.getWriter(), id);
                 } else {
-                    response.getWriter().write("");
+                    response.getWriter().write("[]");
                 }
                 if (jsonp != null) {
                     response.getWriter().write(")");
@@ -829,7 +928,7 @@ public class HTTPAdminListener {
                 response.getWriter().write(jsonp + "(");
             }
             JSONObject exportTypes = new JSONObject();
-            HashSet<String> exportList = new HashSet<String>();
+            HashSet<String> exportList = new HashSet<>();
             for (ServerExportEnum type : ServerExportEnum.values()) {
                 exportList.add(type.value().toUpperCase());
             }
@@ -858,9 +957,15 @@ public class HTTPAdminListener {
             if (baseRequest.isHandled()) return;
             try {
                 // http://www.ietf.org/rfc/rfc4627.txt dictates this mime type
-                response.setContentType(jsonContentType);
+                response.setContentType(JSON_CONTENT_TYPE);
                 if (m_jsonEnabled) {
-                    httpClientInterface.process(baseRequest, response);
+                    if (target.equals("/")) {
+                        httpClientInterface.process(baseRequest, response);
+                    } else {
+                        response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                        response.getWriter().println("Resource not found");
+                        baseRequest.setHandled(true);
+                    }
 
                     // used for perf testing of the http interface
                     /*String msg = "{\"status\":1,\"appstatus\":-128,\"statusstring\":null,\"appstatusstring\":null,\"exception\":null,\"results\":[{\"status\":-128,\"schema\":[{\"name\":\"SVAL1\",\"type\":9},{\"name\":\"SVAL2\",\"type\":9},{\"name\":\"SVAL3\",\"type\":9}],\"data\":[[\"FOO\",\"BAR\",\"BOO\"]]}]}";
@@ -886,7 +991,7 @@ public class HTTPAdminListener {
         try {
             String report = ReportMaker.liveReport();
 
-            response.setContentType("text/html;charset=utf-8");
+            response.setContentType(HTML_CONTENT_TYPE);
             response.setStatus(HttpServletResponse.SC_OK);
             baseRequest.setHandled(true);
 
@@ -927,9 +1032,18 @@ public class HTTPAdminListener {
     }
 
     public HTTPAdminListener(
-            boolean jsonEnabled, String intf, int port, HttpsType httpsType, boolean mustListen) throws Exception {
+            boolean jsonEnabled, String intf, String publicIntf, int port,
+            SslContextFactory sslContextFactory, boolean mustListen
+            ) throws Exception {
         int poolsize = Integer.getInteger("HTTP_POOL_SIZE", 50);
         int timeout = Integer.getInteger("HTTP_REQUEST_TIMEOUT_SECONDS", 15);
+        int cacheMaxAge = Integer.getInteger("HTTP_STATIC_CACHE_MAXAGE", 24*60*60); // 24 hours
+
+        String resolvedIntf = intf == null ? "" : intf.trim().isEmpty() ? ""
+                : HostAndPort.fromHost(intf).withDefaultPort(port).toString();
+
+        m_publicIntf = publicIntf == null ? resolvedIntf : publicIntf.trim().isEmpty() ? resolvedIntf
+                : HostAndPort.fromHost(publicIntf).withDefaultPort(port).toString();
 
         /*
          * Don't force us to look at a huge pile of threads
@@ -961,12 +1075,12 @@ public class HTTPAdminListener {
         // NOW START SocketConnector and create Jetty server but dont start.
         ServerConnector connector = null;
         try {
-            if (httpsType==null || !httpsType.isEnabled()) { // basic HTTP
+            if (sslContextFactory == null) { // basic HTTP
                 // The socket channel connector seems to be faster for our use
                 //SelectChannelConnector connector = new SelectChannelConnector();
                 connector = new ServerConnector(m_server);
 
-                if (intf != null && intf.length() > 0) {
+                if (intf != null && !intf.trim().isEmpty()) {
                     connector.setHost(intf);
                 }
                 connector.setPort(port);
@@ -975,7 +1089,7 @@ public class HTTPAdminListener {
                 connector.open();
                 m_server.addConnector(connector);
             } else { // HTTPS
-                m_server.addConnector(getSSLServerConnector(httpsType, intf, port));
+                m_server.addConnector(getSSLServerConnector(sslContextFactory, intf, port));
             }
 
             //m_server.setConnectors(new Connector[] { connector, sslConnector });
@@ -1004,10 +1118,24 @@ public class HTTPAdminListener {
             ContextHandler deploymentRequestHandler = new ContextHandler("/deployment");
             m_deploymentHandler = new DeploymentRequestHandler();
             deploymentRequestHandler.setHandler(m_deploymentHandler);
+            deploymentRequestHandler.setAllowNullPathInfo(true);
 
             ///profile
             ContextHandler profileRequestHandler = new ContextHandler("/profile");
             profileRequestHandler.setHandler(new UserProfileHandler());
+
+            ContextHandler cssResourceHandler = new ContextHandler("/css");
+            ResourceHandler cssResource = new CacheStaticResourceHandler(CSS_TARGET, cacheMaxAge);
+            cssResourceHandler.setHandler(cssResource);
+
+            ContextHandler imageResourceHandler = new ContextHandler("/images");
+            ResourceHandler imagesResource = new CacheStaticResourceHandler(IMAGES_TARGET, cacheMaxAge);
+            imageResourceHandler.setHandler(imagesResource);
+
+            ContextHandler jsResourceHandler = new ContextHandler("/js");
+            ResourceHandler jsResource = new CacheStaticResourceHandler(JS_TARGET, cacheMaxAge);
+            jsResourceHandler.setHandler(jsResource);
+
 
             ContextHandlerCollection handlers = new ContextHandlerCollection();
             handlers.setHandlers(new Handler[] {
@@ -1016,10 +1144,20 @@ public class HTTPAdminListener {
                     ddlRequestHandler,
                     deploymentRequestHandler,
                     profileRequestHandler,
-                    dbMonitorHandler
-            });
+                    dbMonitorHandler,
+                    cssResourceHandler,
+                    imageResourceHandler,
+                    jsResourceHandler
+                    });
 
-            m_server.setHandler(handlers);
+            GzipHandler compressResourcesHandler = new GzipHandler();
+            compressResourcesHandler.setHandler(handlers);
+
+            compressResourcesHandler.addExcludedMimeTypes(JSON_CONTENT_TYPE);
+            compressResourcesHandler.setIncludedMimeTypes("application/x-javascript", "text/css" ,
+                    "image/gif", "image/png", "image/jpeg", HTML_CONTENT_TYPE);
+
+            m_server.setHandler(compressResourcesHandler);
 
             httpClientInterface.setTimeout(timeout);
             m_jsonEnabled = jsonEnabled;
@@ -1031,54 +1169,13 @@ public class HTTPAdminListener {
         }
     }
 
-    private String getKeyTrustStoreAttribute(String sysPropName, KeyOrTrustStoreType store, String valueType, boolean throwForNull) {
-        String sysProp = System.getProperty(sysPropName);
-        if (StringUtils.isNotBlank(sysProp)) {
-            return sysProp.trim();
-        } else {
-            String value = null;
-            if (store!=null) {
-                value = "path".equals(valueType) ? store.getPath() : store.getPassword();
-            }
-            if (StringUtils.isBlank(value) && throwForNull) {
-                    throw new IllegalArgumentException(
-                        "To enable HTTPS, keystore must be configured with password in deployment file or using system property. " + sysPropName);
-            } else {
-                return value;
-            }
-        }
-    }
-
-    private ServerConnector getSSLServerConnector(HttpsType httpsType, String intf, int port)
+    private ServerConnector getSSLServerConnector(SslContextFactory sslContextFactory, String intf, int port)
         throws IOException {
-        SslContextFactory sslContextFactory = new SslContextFactory();
-        String value = getKeyTrustStoreAttribute("javax.net.ssl.keyStore", httpsType.getKeystore(), "path", true);
-        sslContextFactory.setKeyStorePath(value);
-        sslContextFactory.setKeyStorePassword(getKeyTrustStoreAttribute("javax.net.ssl.keyStorePassword", httpsType.getKeystore(), "password", true));
-        value = getKeyTrustStoreAttribute("javax.net.ssl.trustStore", httpsType.getTruststore(), "path", false);
-        if (value!=null) {
-            sslContextFactory.setTrustStorePath(value);
-        }
-        value = getKeyTrustStoreAttribute("javax.net.ssl.trustStorePassword", httpsType.getTruststore(), "password", false);
-        if (value!=null) {
-            sslContextFactory.setTrustStorePassword(value);
-        }
-        // exclude weak ciphers
-        sslContextFactory.setExcludeCipherSuites("SSL_RSA_WITH_DES_CBC_SHA",
-                "SSL_DHE_RSA_WITH_DES_CBC_SHA", "SSL_DHE_DSS_WITH_DES_CBC_SHA",
-                "SSL_RSA_EXPORT_WITH_RC4_40_MD5",
-                "SSL_RSA_EXPORT_WITH_DES40_CBC_SHA",
-                "SSL_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA",
-                "SSL_DHE_DSS_EXPORT_WITH_DES40_CBC_SHA");
-        /* More configurable things that we are not using for now.
-        sslContextFactory.setKeyManagerPassword("password");
-                */
-
         // SSL HTTP Configuration
         HttpConfiguration httpsConfig = new HttpConfiguration();
-        httpsConfig.setSecureScheme("https");
+        httpsConfig.setSecureScheme("ssl");
         httpsConfig.setSecurePort(port);
-        //Add this customizer to indicate we are in https land
+        //Add this customizer to indicate we are in ssl land
         httpsConfig.addCustomizer(new SecureRequestCustomizer());
         HttpConnectionFactory factory = new HttpConnectionFactory(httpsConfig);
 
@@ -1086,7 +1183,7 @@ public class HTTPAdminListener {
         ServerConnector connector = new ServerConnector(m_server,
             new SslConnectionFactory(sslContextFactory,HttpVersion.HTTP_1_1.asString()),
             factory);
-        if (intf != null && intf.length() > 0) {
+        if (intf != null && !intf.trim().isEmpty()) {
             connector.setHost(intf);
         }
         connector.setPort(port);
@@ -1129,65 +1226,4 @@ public class HTTPAdminListener {
             httpClientInterface.notifyOfCatalogUpdate();
         }
     }
-
-    /**
-     * Get a deployment view that represents what needs to be displayed to VMC, which
-     * reflects the paths that are used by this cluster member and the actual number of
-     * hosts that belong to this cluster whether or not it was elastically expanded
-     * @param deployment
-     * @return adjusted deployment
-     */
-    public static DeploymentType updateRuntimeDeploymentPaths(DeploymentType deployment) {
-        deployment = CatalogUtil.shallowClusterAndPathsClone(deployment);
-        PathsType paths = deployment.getPaths();
-        if (paths.getVoltdbroot() == null) {
-            PathsType.Voltdbroot root = new PathsType.Voltdbroot();
-            root.setPath(VoltDB.instance().getVoltDBRootPath());
-            paths.setVoltdbroot(root);
-        } else {
-            paths.getVoltdbroot().setPath(VoltDB.instance().getVoltDBRootPath());
-        }
-        //snapshot
-        if (paths.getSnapshots() == null) {
-            PathsType.Snapshots snap = new PathsType.Snapshots();
-            snap.setPath(VoltDB.instance().getSnapshotPath());
-            paths.setSnapshots(snap);
-        } else {
-            paths.getSnapshots().setPath(VoltDB.instance().getSnapshotPath());
-        }
-        if (paths.getCommandlog() == null) {
-            //cl
-            PathsType.Commandlog cl = new PathsType.Commandlog();
-            cl.setPath(VoltDB.instance().getCommandLogPath());
-            paths.setCommandlog(cl);
-        } else {
-            paths.getCommandlog().setPath(VoltDB.instance().getCommandLogPath());
-        }
-        if (paths.getCommandlogsnapshot() == null) {
-            //cl snap
-            PathsType.Commandlogsnapshot clsnap = new PathsType.Commandlogsnapshot();
-            clsnap.setPath(VoltDB.instance().getCommandLogSnapshotPath());
-            paths.setCommandlogsnapshot(clsnap);
-        } else {
-            paths.getCommandlogsnapshot().setPath(VoltDB.instance().getCommandLogSnapshotPath());
-        }
-        if (paths.getExportoverflow() == null) {
-            //export overflow
-            PathsType.Exportoverflow exp = new PathsType.Exportoverflow();
-            exp.setPath(VoltDB.instance().getExportOverflowPath());
-            paths.setExportoverflow(exp);
-        } else {
-            paths.getExportoverflow().setPath(VoltDB.instance().getExportOverflowPath());
-        }
-        if (paths.getDroverflow() == null) {
-            //dr overflow
-            final PathsType.Droverflow droverflow = new PathsType.Droverflow();
-            droverflow.setPath(VoltDB.instance().getDROverflowPath());
-            paths.setDroverflow(droverflow);
-        } else {
-            paths.getDroverflow().setPath(VoltDB.instance().getDROverflowPath());
-        }
-        return deployment;
-    }
-
 }

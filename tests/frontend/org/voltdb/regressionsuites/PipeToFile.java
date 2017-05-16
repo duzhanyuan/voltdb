@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -36,8 +36,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
     public class PipeToFile extends Thread {
         final static String m_initToken = "Server completed init";
-        final static String m_rejoinToken = "Node rejoin completed";
-        final static String m_joinToken = "Node join completed";
         final static String m_hostID = "Host id of this node is: ";
 
         FileWriter m_writer ;

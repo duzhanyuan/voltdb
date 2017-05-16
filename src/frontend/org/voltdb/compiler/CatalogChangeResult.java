@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -40,4 +40,11 @@ public class CatalogChangeResult extends AsyncCompilerResult {
     public boolean isForReplay;
     public long replayTxnId;
     public long replayUniqueId;
+
+    // Should catalog diff commands apply to EE or not
+    public boolean requireCatalogDiffCmdsApplyToEE;
+    // mark it false for UpdateClasses, in future may be marked false for deployment changes
+    public boolean hasSchemaChange;
+    // This is set to true if schema change involves stream or connector changes or a view on stream is created or dropped.
+    public boolean requiresNewExportGeneration;
 }

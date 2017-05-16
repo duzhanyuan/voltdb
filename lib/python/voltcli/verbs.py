@@ -1,5 +1,5 @@
 # This file is part of VoltDB.
-# Copyright (C) 2008-2016 VoltDB Inc.
+# Copyright (C) 2008-2017 VoltDB Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -367,6 +367,7 @@ class JavaBundle(object):
            cli.StringOption(None, '--externalinterface', 'externalinterface', 'specify the network interface to use for external ports, such as the admin and client ports'),
            cli.StringOption(None, '--publicinterface', 'publicinterface', 'For hosted or cloud environments with non-public interfaces, this argument specifies a publicly-accessible alias for reaching the server. Particularly useful for remote access to the VoltDB Management Center.'))
 
+
     def start(self, verb, runner):
         pass
 
@@ -585,7 +586,9 @@ class ConnectionBundle(object):
                            max_count    = self.max_count,
                            default_port = self.default_port),
             cli.StringOption('-p', '--password', 'password', "the connection password"),
-            cli.StringOption('-u', '--user', 'username', 'the connection user name'))
+            cli.StringOption('-u', '--user', 'username', 'the connection user name'),
+            cli.StringOption(None, '--ssl', 'ssl_config','''enable and config ssl''', default=None),
+            cli.BooleanOption(None, '--kerberos', 'kerberos', '''enable kerberos'''))
 
     def start(self, verb, runner):
         pass
@@ -608,7 +611,9 @@ class BaseClientBundle(ConnectionBundle):
         runner.voltdb_connect(runner.opts.host.host,
                               runner.opts.host.port,
                               username=runner.opts.username,
-                              password=runner.opts.password)
+                              password=runner.opts.password,
+                              ssl_config=runner.opts.ssl_config,
+                              kerberos=runner.opts.kerberos)
 
     def stop(self, verb, runner):
         runner.voltdb_disconnect()

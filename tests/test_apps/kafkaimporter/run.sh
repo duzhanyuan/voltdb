@@ -60,6 +60,7 @@ function cleanall() {
 # compile the source code for procedures and the client into jarfiles
 function jars() {
     ant all
+    cp formatter.jar $VOLTDB_BASE/bundles
 }
 
 # compile the procedure and client jarfiles if they don't exist
@@ -145,7 +146,6 @@ function async-benchmark() {
         client.kafkaimporter.KafkaImportBenchmark \
         --displayinterval=5 \
         --duration=180 \
-        --kafkaserverlist=localhost:9092 \
         --alltypes=false \
         --useexport=false \
         --expected_rows=6000000 \

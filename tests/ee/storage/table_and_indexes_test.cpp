@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -94,13 +94,12 @@ class TableAndIndexTest : public Test {
         TableAndIndexTest()
             : drStream(44, 64*1024),
               drReplicatedStream(16383, 64*1024) {
-            NValueArray* noParams = NULL;
             mockEngine = new MockVoltDBEngine();
-            eContext = new ExecutorContext(0, 0, NULL, &topend, &pool, noParams, mockEngine, "", 0, &drStream, &drReplicatedStream, 0);
+            eContext = new ExecutorContext(0, 0, NULL, &topend, &pool, mockEngine, "", 0, &drStream, &drReplicatedStream, 0);
             mem = 0;
             *reinterpret_cast<int64_t*>(signature) = 42;
 
-            eContext->setupForPlanFragments(NULL, 44, 44, 44, 44);
+            eContext->setupForPlanFragments(NULL, 44, 44, 44, 44, false);
 
             vector<voltdb::ValueType> districtColumnTypes;
             vector<int32_t> districtColumnLengths;
@@ -398,7 +397,7 @@ TEST_F(TableAndIndexTest, DrTest) {
     drStream.m_enabled = true;
     districtTable->setDR(true);
     //Prepare to insert in a new txn
-    eContext->setupForPlanFragments( NULL, addPartitionId(99), addPartitionId(99), addPartitionId(98), addPartitionId(70));
+    eContext->setupForPlanFragments( NULL, addPartitionId(99), addPartitionId(99), addPartitionId(98), addPartitionId(70), false);
 
     vector<NValue> cachedStringValues;//To free at the end of the test
     TableTuple temp_tuple = districtTempTable->tempTuple();
@@ -460,7 +459,7 @@ TEST_F(TableAndIndexTest, DrTest) {
     EXPECT_EQ(nextTuple.getNValue(7).compare(cachedStringValues.back()), 0);
 
     //Prepare to insert in a new txn
-    eContext->setupForPlanFragments( NULL, addPartitionId(100), addPartitionId(100), addPartitionId(99), addPartitionId(72));
+    eContext->setupForPlanFragments( NULL, addPartitionId(100), addPartitionId(100), addPartitionId(99), addPartitionId(72), false);
 
     /*
      * Test that update propagates
@@ -505,7 +504,7 @@ TEST_F(TableAndIndexTest, DrTest) {
     ASSERT_FALSE(toDelete.isNullTuple());
 
     //Prep another transaction to test propagating a delete
-    eContext->setupForPlanFragments( NULL, addPartitionId(102), addPartitionId(102), addPartitionId(101), addPartitionId(89));
+    eContext->setupForPlanFragments( NULL, addPartitionId(102), addPartitionId(102), addPartitionId(101), addPartitionId(89), false);
 
     districtTable->deleteTuple(toDelete, true);
 
@@ -541,7 +540,7 @@ TEST_F(TableAndIndexTest, DrTestNoPK) {
     drStream.m_enabled = true;
     districtTable->setDR(true);
     //Prepare to insert in a new txn
-    eContext->setupForPlanFragments( NULL, addPartitionId(99), addPartitionId(99), addPartitionId(98), addPartitionId(70));
+    eContext->setupForPlanFragments( NULL, addPartitionId(99), addPartitionId(99), addPartitionId(98), addPartitionId(70), false);
 
     vector<NValue> cachedStringValues;//To free at the end of the test
     TableTuple temp_tuple = districtTempTable->tempTuple();
@@ -603,7 +602,7 @@ TEST_F(TableAndIndexTest, DrTestNoPK) {
     EXPECT_EQ(nextTuple.getNValue(7).compare(cachedStringValues.back()), 0);
 
     //Prepare to insert in a new txn
-    eContext->setupForPlanFragments( NULL, addPartitionId(100), addPartitionId(100), addPartitionId(99), addPartitionId(72));
+    eContext->setupForPlanFragments( NULL, addPartitionId(100), addPartitionId(100), addPartitionId(99), addPartitionId(72), false);
 
     /*
      * Test that delete propagates
@@ -644,7 +643,7 @@ TEST_F(TableAndIndexTest, DrTestNoPKUninlinedColumn) {
     drStream.m_enabled = true;
     customerTable->setDR(true);
     //Prepare to insert in a new txn
-    eContext->setupForPlanFragments( NULL, addPartitionId(99), addPartitionId(99), addPartitionId(98), addPartitionId(70));
+    eContext->setupForPlanFragments( NULL, addPartitionId(99), addPartitionId(99), addPartitionId(98), addPartitionId(70), false);
 
     vector<NValue> cachedStringValues;//To free at the end of the test
     TableTuple temp_tuple = customerTempTable->tempTuple();
@@ -721,7 +720,7 @@ TEST_F(TableAndIndexTest, DrTestNoPKUninlinedColumn) {
     EXPECT_EQ(nextTuple.getNValue(20).compare(cachedStringValues.back()), 0);
 
     //Prepare to insert in a new txn
-    eContext->setupForPlanFragments( NULL, addPartitionId(100), addPartitionId(100), addPartitionId(99), addPartitionId(72));
+    eContext->setupForPlanFragments( NULL, addPartitionId(100), addPartitionId(100), addPartitionId(99), addPartitionId(72), false);
 
     /*
      * Test that delete propagates

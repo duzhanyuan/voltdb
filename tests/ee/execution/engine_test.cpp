@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -51,11 +51,6 @@
 
 #include "harness.h"
 
-#include "catalog/catalog.h"
-#include "catalog/cluster.h"
-#include "catalog/constraint.h"
-#include "catalog/database.h"
-#include "catalog/table.h"
 #include "common/tabletuple.h"
 #include "common/valuevector.h"
 #include "expressions/abstractexpression.h"
@@ -64,11 +59,10 @@
 #include "storage/persistenttable.h"
 #include "storage/tablefactory.h"
 #include "storage/tableiterator.h"
-#include "storage/temptable.h"
 #include "storage/tableutil.h"
 
-#include "test_utils/LoadTableFrom.hpp"
 #include "test_utils/plan_testing_baseclass.h"
+#include "test_utils/LoadTableFrom.hpp"
 
 #include <cstdlib>
 #include <ctime>
@@ -111,8 +105,6 @@ const char *catalog_string =
             "set $PREV voltRoot \"\"\n"
             "set $PREV exportOverflow \"\"\n"
             "set $PREV drOverflow \"\"\n"
-            "set $PREV adminport 0\n"
-            "set $PREV adminstartup false\n"
             "set $PREV heartbeatTimeout 0\n"
             "set $PREV useddlschema false\n"
             "set $PREV drConsumerEnabled false\n"
@@ -373,8 +365,12 @@ public:
     void initialize(const char *catalog_string,
                     uint32_t    random_seed = (uint32_t)time(NULL)) {
         PlanTestingBaseClass<EngineTestTopend>::initialize(catalog_string, random_seed);
-        m_partitioned_customer_table = getPersistentTableAndId("D_CUSTOMER", &m_partitioned_customer_table_id);
-        m_replicated_customer_table = getPersistentTableAndId("R_CUSTOMER", &m_replicated_customer_table_id);
+        m_partitioned_customer_table = getPersistentTableAndId("D_CUSTOMER",
+                                                               &m_partitioned_customer_table_id,
+                                                               &m_partitioned_customer_table);
+        m_replicated_customer_table = getPersistentTableAndId("R_CUSTOMER",
+                                                              &m_replicated_customer_table_id,
+                                                              &m_replicated_customer_table);
 
         //
         // Fill in tuples.  The IndexOrder test does not use
@@ -395,7 +391,7 @@ protected:
     voltdb::PersistentTable* m_partitioned_customer_table;
     int m_partitioned_customer_table_id;
 
-    voltdb::Table* m_replicated_customer_table;
+    voltdb::PersistentTable* m_replicated_customer_table;
     int m_replicated_customer_table_id;
 };
 // Create a random seed once and for all, and use it always.
@@ -549,7 +545,7 @@ TEST_F(ExecutionEngineTest, Execute_PlanFragmentInfo) {
     // Execute the plan.  You'd think this would be more
     // impressive.
     //
-    m_engine->executePlanFragments(1, &fragmentId, NULL, emptyParams, 1000, 1000, 1000, 1000, 1);
+    m_engine->executePlanFragments(1, &fragmentId, NULL, emptyParams, 1000, 1000, 1000, 1000, 1, false);
 
     // Fetch the results.  We have forced them to be written
     // to our own buffer in the local engine.  But we don't

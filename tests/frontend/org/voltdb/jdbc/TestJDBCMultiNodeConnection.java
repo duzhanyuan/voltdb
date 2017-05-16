@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -31,17 +31,17 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 
-
-import junit.framework.Test;
-
 import org.voltdb.BackendTarget;
 import org.voltdb.client.Client;
+import org.voltdb.client.ClientConfig;
 import org.voltdb.client.ClientFactory;
 import org.voltdb.compiler.VoltProjectBuilder;
 import org.voltdb.regressionsuites.LocalCluster;
 import org.voltdb.regressionsuites.MultiConfigSuiteBuilder;
 import org.voltdb.regressionsuites.RegressionSuite;
 import org.voltdb.utils.MiscUtils;
+
+import junit.framework.Test;
 
 public class TestJDBCMultiNodeConnection extends RegressionSuite
 {
@@ -89,6 +89,9 @@ public class TestJDBCMultiNodeConnection extends RegressionSuite
         final List<String> listeners = m_config.getListenerAddresses();
         for (String listener : listeners) {
             sb.append(listener).append(",");
+        }
+        if (ClientConfig.ENABLE_SSL_FOR_TEST) {
+            sb.append("?").append(JDBCTestCommons.SSL_URL_SUFFIX);
         }
         String JDBCURL = sb.toString();
         System.out.println("Connecting to JDBC URL: " + JDBCURL);

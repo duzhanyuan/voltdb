@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.voltdb.CLIConfig;
 import org.voltdb.VoltTable;
+import org.voltdb.CLIConfig.Option;
 import org.voltdb.client.Client;
 import org.voltdb.client.ClientConfig;
 import org.voltdb.client.ClientFactory;
@@ -122,6 +123,9 @@ public class SyncBenchmark {
         @Option(desc = "Number of concurrent threads synchronously calling procedures.")
         int threads = 40;
 
+        @Option(desc = "SSL Configuration file")
+        String ssl_config = "";
+
         @Override
         public void validate() {
             if (duration <= 0) exitWithMessageAndUsage("duration must be > 0");
@@ -158,6 +162,10 @@ public class SyncBenchmark {
         this.config = config;
 
         ClientConfig clientConfig = new ClientConfig("", "", new StatusListener());
+        if (config.ssl_config.trim().length() > 0) {
+            clientConfig.setTrustStoreConfigFromPropertyFile(config.ssl_config);
+            clientConfig.enableSSL();
+        }
 
         client = ClientFactory.createClient(clientConfig);
 

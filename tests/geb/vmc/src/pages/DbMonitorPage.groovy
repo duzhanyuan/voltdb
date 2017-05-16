@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -61,8 +61,8 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         partitionIdleTime               { $("#chartPartitionIdleTime") }
         commandLogStatistics            { $("#chartCommandLogging") }
         databaseReplication             { $("#ChartDrReplicationRate") }
-        storedProcedures                { $("#tblStoredProcedures") }
-        dataTables                      { $("#tblDataTables") }
+        storedProcedures                { $("#divSPSection") }
+        dataTables                      { $("#tblDT") }
 
         serverCpuCheckbox               { $("#ServerCPU") }
         serverRamCheckbox               { $("#ServerRAM") }
@@ -75,10 +75,10 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         dataTablesCheckbox              { $("#DatabaseTables") }
 
         filterStoredProcedure           { $("#filterStoredProc") }
-        filterDatabaseTable             { $("#filterDatabaseTable") }
+        filterDatabaseTable             { $("#filterDT") }
 
-        databaseTableCurrentPage        { $("#lblPreviousTable") }
-        databaseTableTotalPage          { $("#lblTotalPagesofTables") }
+        databaseTableCurrentPage        { $("#tblDT_paginate > div > span.pageIndex") }
+        databaseTableTotalPage          { $("#tblDT_paginate > div > span.totalPages") }
 
         displayPreference               { $("#showMyPreference") }
         graphView                       { $('#graphView') }
@@ -121,7 +121,6 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         avgLatency                      { $("#AVG_LATENCY") }
         timeOfExecution                 { $("#PERC_EXECUTION") }
 
-
         //DBmonitor part for server
         dbmonitorbutton                 { $("#navDbmonitor > a")}
         clusterserverbutton             { $("#btnPopServerList")}
@@ -153,13 +152,12 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         clustertransactionmax       { $("#visualisationTransaction > g > g > g.nv-x.nv-axis > g > g:nth-child(3) > text")}
 
         //partition idle graph
-        partitiongraphmin               { $("#visualisationPartitionIdleTime > g > g > g.nv-x.nv-axis > g > g:nth-child(2) > text")}
+        partitiongraphmin               (required: false) { $("#visualisationPartitionIdleTime > g > g > g.nv-x.nv-axis > g > g:nth-child(2) > text")}
         partitiongraphmax               { $("#visualisationPartitionIdleTime > g > g > g.nv-x.nv-axis > g > g:nth-child(3) > text")}
 
         //command log statistics graph
         commandLogStatisticsMin         { $("#visualisationCommandLog > g > g > g.nv-x.nv-axis > g > g:nth-child(2) > text") }
         commandLogStatisticsMax         { $("#visualisationCommandLog > g > g > g.nv-x.nv-axis > g > g:nth-child(3) > text") }
-
 
         //database replication graph
         databaseReplicationMin          { $("#visualizationDrReplicationRate > g > g > g.nv-x.nv-axis > g > g:nth-child(2) > text") }
@@ -170,20 +168,16 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         clusterwide                     { $("#chartPartitionIdleTime > div.legend > ul > li:nth-child(2)")}
         multipartition                  { $("#chartPartitionIdleTime > div.legend > ul > li:nth-child(3)")}
 
-        storedProceduresMsg             { $("#storeProcedureBody") }
-        databaseTableMsg                { $("#tablesBody") }
+        storedProceduresMsg             { $("#tblSP > tbody > tr > td") }
+        databaseTableMsg                { $("#tblDT > tbody > tr > td") }
 
         header                          { module Header }
         footer                          { module Footer }
 
-
         //DR Section
 
         showHideDrBlock {$("#showHideDrBlock")}
-
         drSection {$("#drSection")}
-
-        divDrReplication {$("#divDrReplication")}
 
         //DR Master Columns
 
@@ -191,16 +185,8 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
 
         status {$("#status")}
 
-        mbOnDisk  {$("#mbOnDisk")}
-
-        replicaLatencyMs {$("#replicaLatencyMs")}
-
-        replicaLatencyTrans {$("#replicaLatencyTrans")}
-
         ascendingDT                 { $(class:"sorting_asc") }
         descendingDT                { $(class:"sorting_desc") }
-
-        drMasterSection {$("#drMasterSection")}
 
         dbDrMode {$("#dbDrMode")}
 
@@ -208,14 +194,8 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
 
         partitionIdRows{$("#tblDrMAster").find(class:"sorting_1")}
 
-
-
-
         //Dr Replica Section
 
-        drReplicaSection {$("#drReplicaSection")}
-
-        replicaServer{$("#replicaServer")}
         replicaStatus{$("#replicaStatus")}
         replicationRate1 {$("#replicationRate1")}
         replicationRate5 {$("#replicationRate5")}
@@ -236,7 +216,6 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         cmdSegmentsInUse {$("#cmdSegmentsInUse")}
         cmdFsyncInterval {$("#cmdFsyncInterval")}
 
-
         drMasterTitle {$("#drMasterTitle")}
         drReplicaTitle {$("#drReplicaTitle")}
         drCLPTitle {$("#drCLPTitle")}
@@ -244,9 +223,6 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         filterServer {$("#filterServer")}
 
         clpServerRows {$("#tblCmdLog").find(class:"sorting_1")}
-
-
-
 
         // UAT
         drTableModeTypeText         { $("#dbDrMode") }
@@ -531,17 +507,6 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         return drSection.displayed
     }
 
-
-
-    def boolean isDrMasterSectionOpen() {
-        return drMasterSection.displayed
-    }
-
-    def boolean isDrReplicaSectionOpen() {
-        return drReplicaSection.displayed
-    }
-
-
     def boolean isCmdLogSectionOpen() {
         return showHideCLPBlock.displayed
     }
@@ -549,8 +514,6 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
     def boolean isCLPAreaOpen() {
         return clpSection.displayed
     }
-
-
 
     /**
      * Opens the "Data" area (containing Stored Procedures and Database Tables
@@ -580,18 +543,15 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         return true
     }
 
-
     def boolean closeDrArea() {
         clickToNotDisplay(showHideDrBlock, drSection)
         return true
     }
 
-
     def boolean closeCLPArea() {
         clickToNotDisplay(showHideCLPBlock, clpSection)
         return true
     }
-
 
     /**
      *  Edits from here
@@ -838,6 +798,7 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         String date = string.substring(3, string.length()-9)
         return date
     }
+
     /*
      * click SQL Query to go to SqlQueryPage
      */
@@ -865,8 +826,8 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
     }
 
     /*
- * get query to delete a table
- */
+     * get query to delete a table
+     */
     def String getQueryToDeleteTableAndView() {
         BufferedReader br = new BufferedReader(new FileReader("src/resources/sqlQueryDbMonitor.txt"));
         String line;
@@ -903,6 +864,82 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
     }
 
     /*
+
+     */
+    def String getQueryToCreateStoredProcedure() {
+        BufferedReader br = new BufferedReader(new FileReader("src/resources/sqlQueryDbMonitor.txt"));
+        String line;
+        String query = ""
+
+        while((line = br.readLine()) != "#createStoredProcedure") {
+        }
+
+        while ((line = br.readLine()) != "#executeStoredProcedure") {
+            // process the line.
+            query = query + line + "\n"
+        }
+
+        return query
+    }
+
+    /*
+
+     */
+    def String getQueryToExecuteProcedureQuery() {
+        BufferedReader br = new BufferedReader(new FileReader("src/resources/sqlQueryDbMonitor.txt"));
+        String line;
+        String query = ""
+
+        while((line = br.readLine()) != "#executeStoredProcedure") {
+        }
+
+        while ((line = br.readLine()) != "#dropStoredProcedure") {
+            // process the line.
+            query = query + line + "\n"
+        }
+
+        return query
+    }
+
+    /*
+
+     */
+    def String getQueryToDropProcedureQuery() {
+        BufferedReader br = new BufferedReader(new FileReader("src/resources/sqlQueryDbMonitor.txt"));
+        String line;
+        String query = ""
+
+        while((line = br.readLine()) != "#dropStoredProcedure") {
+        }
+
+        while ((line = br.readLine()) != "#procedureName") {
+            // process the line.
+            query = query + line + "\n"
+        }
+
+        return query
+    }
+
+    /*
+
+     */
+    def String getNameOfStoredProcedure() {
+        BufferedReader br = new BufferedReader(new FileReader("src/resources/sqlQueryDbMonitor.txt"));
+        String line;
+        String query = ""
+
+        while((line = br.readLine()) != "#procedureName") {
+        }
+
+        while ((line = br.readLine()) != null) {
+            // process the line.
+            query = query + line + "\n"
+        }
+
+        return query
+    }
+
+    /*
      * get tablename that is created and deleted
      */
     def String getTablename() {
@@ -919,10 +956,8 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
 
         query = br.readLine()
 
-
         return query
     }
-
 
     //server search
 
@@ -966,7 +1001,7 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
      *  to check ascending order, check the class "sorttable_sorted" displayed
      */
     def boolean tableInAscendingOrder() {
-        if ( ascending.displayed )
+        if ( ascendingDT.displayed )
             return true
         else
             return false
@@ -977,18 +1012,7 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
      *  to check ascending order, check the class "sorttable_sorted" displayed
      */
     def boolean tableInDescendingOrder() {
-        if ( descending.displayed )
-            return true
-        else
-            return false
-    }
-
-    /*
-    *   return true if table is in ascending order
-    *  to check ascending order, check the class "sorting_asc" displayed
-    */
-    def boolean tableInAscendingOrderDT() {
-        if ( ascendingDT.displayed )
+        if ( descendingDT.displayed )
             return true
         else
             return false
@@ -1041,34 +1065,6 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
     }
 
     /*
-     *  click the status column in DR MAster table
-     */
-    def boolean clickMbOnDisk() {
-        mbOnDisk.click()
-    }
-
-    /*
-     *  click the replicaLatencyMs column in DR MAster table
-     */
-    def boolean clickReplicaLatencyMs() {
-        replicaLatencyMs.click()
-    }
-
-    /*
-     *  click the replicaLatencyTrans column in DR MAster table
-     */
-    def boolean clickReplicaLatencyTrans() {
-        replicaLatencyTrans.click()
-    }
-
-    /*
-     *  click the server column in DR Replica table
-     */
-    def boolean clickReplicaServer() {
-        replicaServer.click()
-    }
-
-    /*
      *  click the status column in DR Replica table
      */
     def boolean clickReplicaStatus() {
@@ -1089,7 +1085,7 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         replicationRate5.click()
     }
 
-/*
+    /*
      *  click the cmdServer column in  Command log table
      */
     def boolean clickCmdServer() {
@@ -1124,17 +1120,12 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         cmdSegmentsInUse.click()
     }
 
-
     /*
-   *    click the FsyncInterval column in  Command log table
-   */
+     *    click the FsyncInterval column in  Command log table
+     */
     def boolean clickCmdFsyncInterval() {
         cmdFsyncInterval.click()
     }
-
-
-
-
 
     /*
      *  click the min rows column in database table
@@ -1273,5 +1264,41 @@ class DbMonitorPage extends VoltDBManagementCenterPage {
         }
 
         return result
+    }
+
+    /*
+     *  openPartitionIdleGraph opens and checks the
+     *
+     */
+    def boolean openPartitionIdleGraph() {
+        openDisplayPreference()
+        preferencesTitleDisplayed()
+        savePreferencesBtnDisplayed()
+        popupCloseDisplayed()
+
+        partitionIdleTimeCheckboxDisplayed()
+        partitionIdleTimeCheckboxClick()
+        savePreferences()
+
+        if (partitionIdleTimeDisplayed())
+            return true
+        else
+            return false
+    }
+
+    def boolean closePartitionIdleGraph() {
+        openDisplayPreference()
+        preferencesTitleDisplayed()
+        savePreferencesBtnDisplayed()
+        popupCloseDisplayed()
+
+        partitionIdleTimeCheckboxDisplayed()
+        partitionIdleTimeCheckboxClick()
+        savePreferences()
+
+        if (partitionIdleTimeDisplayed())
+            return false
+        else
+            return true
     }
 }

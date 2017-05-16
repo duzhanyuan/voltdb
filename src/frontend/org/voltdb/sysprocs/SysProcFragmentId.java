@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -196,6 +196,12 @@ public class SysProcFragmentId
     public static final long PF_postResetDR = 282;
     public static final long PF_postResetDRAggregate = 283;
 
+    // @ResetDRSingle
+    public static final long PF_preResetDRSingle = 284;
+    public static final long PF_preResetDRSingleAggregate = 285;
+    public static final long PF_postResetDRSingle = 286;
+    public static final long PF_postResetDRSingleAggregate = 287;
+
     // @ExecuteTask
     public static final long PF_executeTask = 290;
     public static final long PF_executeTaskAggregate = 291;
@@ -205,4 +211,12 @@ public class SysProcFragmentId
     public static final long PF_updateSettingsBarrierAggregate = 301;
     public static final long PF_updateSettings = 302;
     public static final long PF_updateSettingsAggregate = 303;
+
+    // @PrepareShutdown
+    public static final long PF_prepareShutdown = 310;
+    public static final long PF_prepareShutdownAggregate = 311;
+
+    // @SwapTables
+    public static final long PF_swapTables = 320;
+    public static final long PF_swapTablesAggregate = 321;
 }

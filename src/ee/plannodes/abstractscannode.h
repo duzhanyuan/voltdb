@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -71,7 +71,14 @@ public:
     bool isEmptyScan() const { return m_isEmptyScan; }
 
 protected:
-    AbstractScanPlanNode() { }
+    AbstractScanPlanNode()
+        : m_target_table_name()
+        , m_tcd(NULL)
+        , m_predicate()
+        , m_isSubQuery(false)
+        , m_isEmptyScan(false)
+    {
+    }
 
     void loadFromJSONObject(PlannerDomValue obj);
 

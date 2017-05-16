@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -23,6 +23,8 @@ import org.voltcore.logging.VoltLogger;
 import org.voltdb.CommandLog;
 import org.voltdb.CommandLog.DurabilityListener;
 import org.voltdb.iv2.SpScheduler.DurableUniqueIdListener;
+import org.voltdb.utils.MiscUtils;
+import org.voltdb.utils.VoltTrace;
 
 /**
  * This class is not thread-safe. Most of its usage is on the Site thread.
@@ -75,7 +77,9 @@ public class SpDurabilityListener implements DurabilityListener {
 
         @Override
         public void addTask(TransactionTask task) {
-            setLastDurableUniqueId(task.m_txnState.uniqueId);
+            if (!task.m_txnState.isReadOnly()) {
+                setLastDurableUniqueId(task.m_txnState.uniqueId);
+            }
         }
 
         @Override
@@ -136,6 +140,11 @@ public class SpDurabilityListener implements DurabilityListener {
         }
 
         @Override
+        public boolean isChanged() {
+            return !m_pendingTransactions.isEmpty();
+        }
+
+        @Override
         public int getTaskListSize() {
             return m_pendingTransactions.size();
         }
@@ -143,6 +152,13 @@ public class SpDurabilityListener implements DurabilityListener {
         private void queuePendingTasks() {
             // Notify all sync transactions and the SP UniqueId listeners
             for (TransactionTask o : m_pendingTransactions) {
+                final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.SPI);
+                if (traceLog != null) {
+                    traceLog.add(() -> VoltTrace.endAsync("durability",
+                                                          MiscUtils.hsIdTxnIdToString(m_spScheduler.m_mailbox.getHSId(),
+                                                                                      o.getSpHandle())));
+                }
+
                 m_pendingTasks.offer(o);
                 // Make sure all queued tasks for this MP txn are released
                 if (!o.getTransactionState().isSinglePartition()) {

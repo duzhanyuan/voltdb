@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -260,6 +260,12 @@ static const int FUNC_VOLT_REGEXP_POSITION             = 20041;
 
 static const int FUNC_VOLT_ROUND                       = 20042;
 static const int FUNC_VOLT_STR                         = 20043;
+
+// our local function
+static const int FUNC_INET_NTOA                        = 20044;
+static const int FUNC_INET_ATON                        = 20045;
+static const int FUNC_INET6_NTOA                       = 20046;
+static const int FUNC_INET6_ATON                       = 20047;
 
 // Geospatial functions
 static const int FUNC_VOLT_POINTFROMTEXT               = 21000;

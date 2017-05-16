@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -151,6 +151,11 @@ public class SQLPatternFactory
             return new SQLPatternPartElement(str);
         }
 
+        public static SQLPatternPart dot()
+        {
+            return new SQLPatternPartElement("\\.");
+        }
+
         public static SQLPatternPart tokenAlternatives(String... strs)
         {
             return oneOf(strs);
@@ -175,6 +180,16 @@ public class SQLPatternFactory
             //TODO: Does not recognize quoted identifiers.
             // Accepts '.', but they get rejected in the code with a clear error message.
             return new SQLPatternPartElement("[\\w.$]+");
+        }
+
+        public static SQLPatternPart functionName()
+        {
+            return new SQLPatternPartElement("[\\w$]+");
+        }
+
+        public static SQLPatternPart classPath()
+        {
+            return new SQLPatternPartElement("(?:\\w+\\.)*\\w+");
         }
 
         public static SQLPatternPart languageName()

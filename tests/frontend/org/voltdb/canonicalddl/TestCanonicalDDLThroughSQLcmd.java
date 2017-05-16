@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -30,6 +30,11 @@
 
 package org.voltdb.canonicalddl;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -39,11 +44,16 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLDecoder;
 
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+
 import org.junit.Test;
 import org.voltcore.utils.PortGenerator;
+import org.voltcore.utils.ssl.SSLConfiguration;
 import org.voltdb.AdhocDDLTestBase;
 import org.voltdb.VoltDB;
 import org.voltdb.VoltDB.Configuration;
+import org.voltdb.client.ClientConfig;
 import org.voltdb.compiler.VoltCompiler;
 import org.voltdb.compiler.VoltProjectBuilder;
 import org.voltdb.fullddlfeatures.TestDDLFeatures;
@@ -57,7 +67,7 @@ public class TestCanonicalDDLThroughSQLcmd extends AdhocDDLTestBase {
     private String getFirstCanonicalDDL() throws Exception {
         String pathToCatalog = Configuration.getPathToCatalogForTest("fullDDL.jar");
 
-        VoltCompiler compiler = new VoltCompiler();
+        VoltCompiler compiler = new VoltCompiler(false);
         final URL url = TestDDLFeatures.class.getResource("fullDDL.sql");
         String pathToSchema = URLDecoder.decode(url.getPath(), "UTF-8");
         boolean success = compiler.compileFromDDL(pathToCatalog, pathToSchema);
@@ -69,7 +79,7 @@ public class TestCanonicalDDLThroughSQLcmd extends AdhocDDLTestBase {
         String pathToCatalog = Configuration.getPathToCatalogForTest("emptyDDL.jar");
         String pathToDeployment = Configuration.getPathToCatalogForTest("emptyDDL.xml");
 
-        VoltCompiler compiler = new VoltCompiler();
+        VoltCompiler compiler = new VoltCompiler(false);
         VoltProjectBuilder builder = new VoltProjectBuilder();
 
         builder.setUseDDLSchema(true);
@@ -189,6 +199,12 @@ public class TestCanonicalDDLThroughSQLcmd extends AdhocDDLTestBase {
 
                 return exitValue;
             }
+            catch (IllegalThreadStateException notYetDone) {
+                elapsedtime = System.currentTimeMillis() - starttime;
+                ++pollcount;
+                System.err.println("External process (" + commandPath + ") has not yet exited after " + elapsedtime + "ms");
+                continue;
+            }
             catch (Exception e) {
                 elapsedtime = System.currentTimeMillis() - starttime;
                 ++pollcount;
@@ -201,12 +217,46 @@ public class TestCanonicalDDLThroughSQLcmd extends AdhocDDLTestBase {
     }
 
     private String getDDLFromHTTP(int httpdPort) throws Exception {
-        URL ddlURL = new URL(String.format("http://localhost:%d/ddl/", httpdPort));
 
-        HttpURLConnection conn = (HttpURLConnection) ddlURL.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.connect();
+        URL ddlURL;
+        HttpURLConnection conn;
+        if (ClientConfig.ENABLE_SSL_FOR_TEST) {
+            SSLContext sslCtx = SSLConfiguration.createSslContext(new SSLConfiguration.SslConfig());
+            ddlURL = new URL(String.format("https://localhost:%d/ddl/", httpdPort));
+            HttpsURLConnection connection = (HttpsURLConnection)ddlURL.openConnection();
+            connection.setSSLSocketFactory(sslCtx.getSocketFactory());
+            connection.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                        @Override
+                        public boolean verify(String hostname, javax.net.ssl.SSLSession sslSession) {
+                            if (hostname.equals("localhost")) {
+                                return true;
+                            }
+                            return false;
+                        }
+                    });
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            try {
+                connection.connect();
+            }
+            catch (IOException ioe) {
+                System.err.println("failed to connect to " + ddlURL);
+                ioe.printStackTrace();
+            }
+            conn = connection;
+        } else {
+            ddlURL = new URL(String.format("http://localhost:%d/ddl/", httpdPort));
+            conn = (HttpURLConnection) ddlURL.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            try {
+                conn.connect();
+            }
+            catch (IOException ioe) {
+                System.err.println("failed to connect to " + ddlURL);
+                ioe.printStackTrace();
+            }
+        }
 
         BufferedReader in = null;
         try {

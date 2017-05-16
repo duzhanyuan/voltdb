@@ -1,5 +1,5 @@
 # This file is part of VoltDB.
-# Copyright (C) 2008-2016 VoltDB Inc.
+# Copyright (C) 2008-2017 VoltDB Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -17,9 +17,9 @@
 from voltcli import utility
 
 @VOLT.Command(
-    bundles = VOLT.AdminBundle(),
-    description = 'Update the Log4J configuration.',
-    arguments = (
+    bundles=VOLT.AdminBundle(),
+    description='Update the Log4J configuration.',
+    arguments=(
         VOLT.PathArgument('log4j_xml_path', 'the Log4J configuration file', exists=True),
     )
 )

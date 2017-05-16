@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -49,14 +49,19 @@ public class HSQLInterface {
     /**
      * Naming conventions for unnamed indexes and constraints
      */
+    public static final String AUTO_GEN_PREFIX = "VOLTDB_AUTOGEN_";
+
+    // Prefixes for system-generated indexes that enforce constraints
+    public static final String AUTO_GEN_IDX_PREFIX = AUTO_GEN_PREFIX + "IDX_";
+    public static final String AUTO_GEN_PRIMARY_KEY_PREFIX = AUTO_GEN_IDX_PREFIX + "PK_";
+
+    // Prefixes for indexes on materialized views
     public static final String AUTO_GEN_MATVIEW = "MATVIEW_PK_";
     public static final String AUTO_GEN_MATVIEW_IDX = AUTO_GEN_MATVIEW + "INDEX";
+
+    // Prefixes for constraints
+    public static final String AUTO_GEN_CONSTRAINT_PREFIX = AUTO_GEN_PREFIX + "CT_";
     public static final String AUTO_GEN_MATVIEW_CONST = AUTO_GEN_MATVIEW + "CONSTRAINT";
-    public static final String AUTO_GEN_PREFIX = "VOLTDB_AUTOGEN_";
-    public static final String AUTO_GEN_IDX_PREFIX = AUTO_GEN_PREFIX + "IDX_";
-    public static final String AUTO_GEN_CONSTRAINT_PREFIX = AUTO_GEN_IDX_PREFIX + "CT_";
-    public static final String AUTO_GEN_PRIMARY_KEY_PREFIX = AUTO_GEN_IDX_PREFIX + "PK_";
-    public static final String AUTO_GEN_CONSTRAINT_WRAPPER_PREFIX = AUTO_GEN_PREFIX + "CONSTRAINT_IDX_";
 
     /**
      * The spacer to use for nested XML elements

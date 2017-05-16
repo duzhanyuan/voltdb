@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -87,10 +87,13 @@ public class SQLCommand
         return m_readme;
     }
 
-    private static List<String> RecallableSessionLines = new ArrayList<String>();
+    private static List<String> RecallableSessionLines = new ArrayList<>();
     private static boolean m_testFrontEndOnly;
     private static String m_testFrontEndResult;
 
+    // Special exception type to inform main to return m_exitCode and stop SQLCmd
+    @SuppressWarnings("serial")
+    private static class SQLCmdEarlyExitException extends RuntimeException {}
 
     private static String patchErrorMessageWithFile(String batchFileName, String message) {
 
@@ -170,7 +173,8 @@ public class SQLCommand
                 public void actionPerformed(ActionEvent e) {
                     CursorBuffer cursorBuffer = interactiveReader.getCursorBuffer();
                     if (cursorBuffer.length() == 0) {
-                        System.exit(m_exitCode);
+                        // tells caller to stop (basically a goto)
+                        throw new SQLCmdEarlyExitException();
                     } else {
                         try {
                             interactiveReader.delete();
@@ -351,6 +355,9 @@ public class SQLCommand
             if (subcommand.equals("proc") || subcommand.equals("procedures")) {
                 execListProcedures();
             }
+            else if (subcommand.equals("functions")) {
+                execListFunctions();
+            }
             else if (subcommand.equals("tables")) {
                 execListTables();
             }
@@ -414,10 +421,10 @@ public class SQLCommand
         // This would save churn on startup and on DDL update.
         if (Classlist.isEmpty()) {
             System.out.println();
-            System.out.println("--- Empty Class List -----------------------");
+            printCatalogHeader("Empty Class List");
             System.out.println();
         }
-        List<String> list = new LinkedList<String>(Classlist.keySet());
+        List<String> list = new LinkedList<>(Classlist.keySet());
         Collections.sort(list);
         int padding = 0;
         for (String classname : list) {
@@ -425,9 +432,9 @@ public class SQLCommand
         }
         String format = " %1$-" + padding + "s";
         String categoryHeader[] = new String[] {
-                "--- Potential Procedure Classes ----------------------------",
-                "--- Active Procedure Classes  ------------------------------",
-                "--- Non-Procedure Classes ----------------------------------"};
+                "Potential Procedure Classes",
+                "Active Procedure Classes",
+                "Non-Procedure Classes"};
         for (int i = 0; i<3; i++) {
             boolean firstInCategory = true;
             for (String classname : list) {
@@ -443,7 +450,7 @@ public class SQLCommand
                 if (firstInCategory) {
                     firstInCategory = false;
                     System.out.println();
-                    System.out.println(categoryHeader[i]);
+                    printCatalogHeader(categoryHeader[i]);
                 }
                 System.out.printf(format, classname);
                 System.out.println();
@@ -464,8 +471,24 @@ public class SQLCommand
         System.out.println();
     }
 
+    private static void execListFunctions() throws Exception {
+        System.out.println();
+        printCatalogHeader("User-defined Functions");
+        String outputFormat = "%-20s%-20s%-50s";
+        VoltTable tableData = m_client.callProcedure("@SystemCatalog", "FUNCTIONS").getResults()[0];
+        while (tableData.advanceRow()) {
+            String functionType = tableData.getString("FUNCTION_TYPE");
+            String functionName = tableData.getString("FUNCTION_NAME");
+            String className = tableData.getString("CLASS_NAME");
+            String methodName = tableData.getString("METHOD_NAME");
+            System.out.println(String.format(outputFormat, functionName,
+                    functionType + " function", className + "." + methodName));
+        }
+        System.out.println();
+    }
+
     private static void execListProcedures() {
-        List<String> list = new LinkedList<String>(Procedures.keySet());
+        List<String> list = new LinkedList<>(Procedures.keySet());
         Collections.sort(list);
         int padding = 0;
         for (String procedure : list) {
@@ -483,14 +506,15 @@ public class SQLCommand
             if (procedure.startsWith("@")) {
                 if (firstSysProc) {
                     firstSysProc = false;
-                    System.out.println("--- System Procedures --------------------------------------");
+                    System.out.println();
+                    printCatalogHeader("System Procedures");
                 }
             }
             else {
                 if (firstUserProc) {
                     firstUserProc = false;
                     System.out.println();
-                    System.out.println("--- User Procedures ----------------------------------------");
+                    printCatalogHeader("User Procedures");
                 }
             }
             for (List<String> parameterSet : Procedures.get(procedure).values()) {
@@ -519,10 +543,14 @@ public class SQLCommand
         }
     }
 
+    private static void printCatalogHeader(final String name) {
+        System.out.println("--- " + name + " " + String.join("", Collections.nCopies(57 - name.length(), "-")));
+    }
+
     private static void printTables(final String name, final Collection<String> tables)
     {
         System.out.println();
-        System.out.println("--- " + name + " --------------------------------------------");
+        printCatalogHeader(name);
         for (String table : tables) {
             System.out.println(table);
         }
@@ -586,6 +614,9 @@ public class SQLCommand
         try {
             executeScriptFromReader(fileInfo, reader);
         }
+        catch (SQLCmdEarlyExitException e) {
+            throw e;
+        }
         catch (Exception x) {
             stopOrContinue(x);
         }
@@ -599,7 +630,6 @@ public class SQLCommand
     /**
      *
      * @param fileInfo  The FileInfo object describing the file command (or stdin)
-     * @param script    The line reader object to read from
      * @throws Exception
      */
     private static void executeScriptFromReader(FileInfo fileInfo, SQLCommandLineReader reader)
@@ -762,9 +792,10 @@ public class SQLCommand
             m_startTime = System.nanoTime();
             SQLParser.ExecuteCallResults execCallResults = SQLParser.parseExecuteCall(statement, Procedures);
             if (execCallResults != null) {
+                String procName = execCallResults.procedure;
                 Object[] objectParams = execCallResults.getParameterObjects();
 
-                if (execCallResults.procedure.equals("@UpdateApplicationCatalog")) {
+                if (procName.equals("@UpdateApplicationCatalog")) {
                     File catfile = null;
                     if (objectParams[0] != null) {
                         catfile = new File((String)objectParams[0]);
@@ -778,7 +809,7 @@ public class SQLCommand
                     // Need to update the stored procedures after a catalog change (could have added/removed SPs!).  ENG-3726
                     loadStoredProcedures(Procedures, Classlist);
                 }
-                else if (execCallResults.procedure.equals("@UpdateClasses")) {
+                else if (procName.equals("@UpdateClasses")) {
                     File jarfile = null;
                     if (objectParams[0] != null) {
                         jarfile = new File((String)objectParams[0]);
@@ -789,11 +820,14 @@ public class SQLCommand
                 }
                 else {
                     // @SnapshotDelete needs array parameters.
-                    if (execCallResults.procedure.equals("@SnapshotDelete")) {
+                    if (procName.equals("@SnapshotDelete")) {
                         objectParams[0] = new String[] { (String)objectParams[0] };
                         objectParams[1] = new String[] { (String)objectParams[1] };
                     }
-                    printResponse(callProcedureHelper(execCallResults.procedure, objectParams));
+
+                    boolean suppressTableOutputForDML = ! procName.equals("@SwapTables");
+
+                    printResponse(callProcedureHelper(execCallResults.procedure, objectParams), suppressTableOutputForDML);
                 }
                 return;
             }
@@ -802,7 +836,7 @@ public class SQLCommand
             if (explainStatement != null) {
                 // We've got a statement that starts with "explain", send the statement to
                 // @Explain (after parseExplainCall() strips "explain").
-                printResponse(m_client.callProcedure("@Explain", explainStatement));
+                printResponse(m_client.callProcedure("@Explain", explainStatement), false);
                 return;
             }
 
@@ -810,7 +844,15 @@ public class SQLCommand
             if (explainProcName != null) {
                 // We've got a statement that starts with "explainproc", send the statement to
                 // @ExplainProc (now that parseExplainProcCall() has stripped out "explainproc").
-                printResponse(m_client.callProcedure("@ExplainProc", explainProcName));
+                printResponse(m_client.callProcedure("@ExplainProc", explainProcName), false);
+                return;
+            }
+
+            String explainViewName = SQLParser.parseExplainViewCall(statement);
+            if (explainViewName != null) {
+                // We've got a statement that starts with "explainview", send the statement to
+                // @ExplainView (now that parseExplainViewCall() has stripped out "explainview").
+                printResponse(m_client.callProcedure("@ExplainView", explainViewName), false);
                 return;
             }
 
@@ -841,14 +883,14 @@ public class SQLCommand
             }
 
             // All other commands get forwarded to @AdHoc
-            printResponse(callProcedureHelper("@AdHoc", statement));
+            printResponse(callProcedureHelper("@AdHoc", statement), true);
 
         } catch (Exception exc) {
             stopOrContinue(exc);
         }
     }
 
-    private static void stopOrContinue(Exception exc) {
+    private static int stopOrContinue(Exception exc) {
         System.err.println(exc.getMessage());
         if (m_debug) {
             exc.printStackTrace(System.err);
@@ -859,7 +901,7 @@ public class SQLCommand
         m_exitCode = -1;
         if (m_stopOnError) {
             if ( ! m_interactive ) {
-                System.exit(m_exitCode);
+                throw new SQLCmdEarlyExitException();
             }
             // Setting this member to drive a fast stack unwind from
             // recursive readScriptFile requires explicit checks in that code,
@@ -867,6 +909,7 @@ public class SQLCommand
             // would require additional exception handlers in the caller(s)
             m_returningToPromptAfterError = true;
         }
+        return 0;
     }
 
     // Output generation
@@ -879,7 +922,7 @@ public class SQLCommand
                  table.getRowCount() == 1 && table.getColumnCount() == 1 && table.getColumnType(0) == VoltType.BIGINT);
     }
 
-    private static void printResponse(ClientResponse response) throws Exception
+    private static void printResponse(ClientResponse response, boolean suppressTableOutputForDML) throws Exception
     {
         if (response.getStatus() != ClientResponse.SUCCESS) {
             throw new Exception("Execution Error: " + response.getStatusString());
@@ -888,14 +931,14 @@ public class SQLCommand
         long elapsedTime = System.nanoTime() - m_startTime;
         for (VoltTable t : response.getResults()) {
             long rowCount;
-            if (!isUpdateResult(t)) {
+            if (suppressTableOutputForDML && isUpdateResult(t)) {
+                rowCount = t.fetchRow(0).getLong(0);
+            }
+            else {
                 rowCount = t.getRowCount();
                 // Run it through the output formatter.
                 m_outputFormatter.printTable(System.out, t, m_outputShowMetadata);
                 //System.out.println("printable");
-            }
-            else {
-                rowCount = t.fetchRow(0).getLong(0);
             }
             if (m_outputShowMetadata) {
                 System.out.printf("(Returned %d rows in %.2fs)\n",
@@ -940,9 +983,9 @@ public class SQLCommand
                                                              .put( 1, Arrays.asList("varchar")).build()
                 );
         Procedures.put("@SnapshotSave",
-                ImmutableMap.<Integer, List<String>>builder().put( 3, Arrays.asList("varchar", "varchar", "bit")).
-                put( 1, Arrays.asList("varchar")).build()
-                );
+                ImmutableMap.<Integer, List<String>>builder().put( 0, new ArrayList<String>())
+                                                             .put( 1, Arrays.asList("varchar"))
+                                                             .put( 3, Arrays.asList("varchar", "varchar", "bit")).build());
         Procedures.put("@SnapshotScan",
                 ImmutableMap.<Integer, List<String>>builder().put( 1,
                 Arrays.asList("varchar")).build());
@@ -966,6 +1009,8 @@ public class SQLCommand
                 ImmutableMap.<Integer, List<String>>builder().put( 1, Arrays.asList("varchar")).build());
         Procedures.put("@ExplainProc",
                 ImmutableMap.<Integer, List<String>>builder().put( 1, Arrays.asList("varchar")).build());
+        Procedures.put("@ExplainView",
+                ImmutableMap.<Integer, List<String>>builder().put( 1, Arrays.asList("varchar")).build());
         Procedures.put("@ValidatePartitioning",
                 ImmutableMap.<Integer, List<String>>builder().put( 2, Arrays.asList("int", "varbinary")).build());
         Procedures.put("@GetPartitionKeys",
@@ -973,7 +1018,13 @@ public class SQLCommand
         Procedures.put("@GC",
                 ImmutableMap.<Integer, List<String>>builder().put( 0, new ArrayList<String>()).build());
         Procedures.put("@ResetDR",
-                ImmutableMap.<Integer, List<String>>builder().put( 0, new ArrayList<String>()).build());
+                ImmutableMap.<Integer, List<String>>builder().put( 3, Arrays.asList("tinyint", "tinyint", "tinyint")).build());
+        Procedures.put("@SwapTables",
+                ImmutableMap.<Integer, List<String>>builder().put( 2, Arrays.asList("varchar", "varchar")).build());
+        Procedures.put("@Trace",
+                ImmutableMap.<Integer, List<String>>builder().put( 0, new ArrayList<String>())
+                                                             .put( 1, Arrays.asList("varchar"))
+                                                             .put( 2, Arrays.asList("varchar", "varchar")).build());
     }
 
     private static Client getClient(ClientConfig config, String[] servers, int port) throws Exception
@@ -982,6 +1033,7 @@ public class SQLCommand
 
         // Only fail if we can't connect to any servers
         boolean connectedAnyServer = false;
+        String connectionErrorMessages = "";
 
         for (String server : servers) {
             try {
@@ -989,14 +1041,15 @@ public class SQLCommand
                 connectedAnyServer = true;
             }
             catch (UnknownHostException e) {
+                connectionErrorMessages += "\n    " + server.trim() + ":" + port + " - UnknownHostException";
             }
             catch (IOException e) {
-
+                connectionErrorMessages += "\n    " + server.trim() + ":" + port + " - " + e.getMessage();
             }
         }
 
         if (!connectedAnyServer) {
-            throw new IOException("Unable to connect to VoltDB cluster");
+            throw new IOException("Unable to connect to VoltDB cluster" + connectionErrorMessages);
         }
         return client;
     }
@@ -1006,9 +1059,10 @@ public class SQLCommand
     {
         System.out.print(msg);
         System.out.println("\n");
-        printUsage(-1);
+        m_exitCode = -1;
+        printUsage();
     }
-    private static void printUsage(int exitCode)
+    private static void printUsage()
     {
         System.out.println(
         "Usage: sqlcmd --help\n"
@@ -1017,6 +1071,7 @@ public class SQLCommand
         + "              [--user=user]\n"
         + "              [--password=password]\n"
         + "              [--kerberos=jaas_login_configuration_entry_key]\n"
+        + "              [--ssl or --ssl=ssl-configuration-file]\n"
         + "              [--query=query]\n"
         + "              [--output-format=(fixed|csv|tab)]\n"
         + "              [--output-skip-metadata]\n"
@@ -1065,7 +1120,6 @@ public class SQLCommand
         + "  Read-only queries that take longer than this number of milliseconds will abort. Default: " + BatchTimeoutOverrideType.DEFAULT_TIMEOUT/1000.0 + " seconds.\n"
         + "\n"
         );
-        System.exit(exitCode);
     }
 
     // printHelp() can print readme either to a file or to the screen
@@ -1083,15 +1137,16 @@ public class SQLCommand
         }
         catch (Exception x) {
             System.err.println(x.getMessage());
-            System.exit(-1);
+            m_exitCode = -1;
+            return;
         }
     }
 
     private static class Tables
     {
-        TreeSet<String> tables = new TreeSet<String>();
-        TreeSet<String> exports = new TreeSet<String>();
-        TreeSet<String> views = new TreeSet<String>();
+        TreeSet<String> tables = new TreeSet<>();
+        TreeSet<String> exports = new TreeSet<>();
+        TreeSet<String> views = new TreeSet<>();
     }
 
     private static Tables getTables() throws Exception
@@ -1150,12 +1205,12 @@ public class SQLCommand
             proc_param_counts.put(this_proc, curr_val);
         }
         params.resetRowPosition();
-        Set<String> userProcs = new HashSet<String>();
+        Set<String> userProcs = new HashSet<>();
         while (procs.advanceRow()) {
             String proc_name = procs.getString("PROCEDURE_NAME");
             userProcs.add(proc_name);
             Integer param_count = proc_param_counts.get(proc_name);
-            ArrayList<String> this_params = new ArrayList<String>();
+            ArrayList<String> this_params = new ArrayList<>();
             // prepopulate it to make sure the size is right
             if (param_count != null) {
                 for (int i = 0; i < param_count; i++) {
@@ -1165,11 +1220,11 @@ public class SQLCommand
             else {
                 param_count = 0;
             }
-            HashMap<Integer, List<String>> argLists = new HashMap<Integer, List<String>>();
+            HashMap<Integer, List<String>> argLists = new HashMap<>();
             argLists.put(param_count, this_params);
             procedures.put(proc_name, argLists);
         }
-        for (String proc_name : new ArrayList<String>(procedures.keySet())) {
+        for (String proc_name : new ArrayList<>(procedures.keySet())) {
             if (!proc_name.startsWith("@") && !userProcs.contains(proc_name)) {
                 procedures.remove(proc_name);
             }
@@ -1239,13 +1294,16 @@ public class SQLCommand
         String[] splitStrings = arg.split("=", 2);
         if (splitStrings[1].isEmpty()) {
             printUsage("Missing input value for " + splitStrings[0]);
+            return null;
         }
         return splitStrings[1];
     }
 
-    // Application entry point
-    public static void main(String args[])
-    {
+    /**
+     * Wraps the main routine. Is callable from other code without fear of it
+     * calling System.exit(..).
+     */
+    public static int mainWithReturnCode(String args[]) {
         TimeZone.setDefault(TimeZone.getTimeZone("GMT+0"));
         // Initialize parameter defaults
         String serverList = "localhost";
@@ -1254,25 +1312,33 @@ public class SQLCommand
         String password = "";
         String kerberos = "";
         List<String> queries = null;
-        String ddlFile = "";
+        String ddlFileText = "";
+        String sslConfigFile = null;
+        boolean enableSSL = false;
 
         // Parse out parameters
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             if (arg.startsWith("--servers=")) {
                 serverList = extractArgInput(arg);
+                if (serverList == null) return -1;
             }
             else if (arg.startsWith("--port=")) {
-                port = Integer.valueOf(extractArgInput(arg));
+                String portStr = extractArgInput(arg);
+                if (portStr == null) return -1;
+                port = Integer.valueOf(portStr);
             }
             else if (arg.startsWith("--user=")) {
                 user = extractArgInput(arg);
+                if (user == null) return -1;
             }
             else if (arg.startsWith("--password=")) {
                 password = extractArgInput(arg);
+                if (password == null) return -1;
             }
             else if (arg.startsWith("--kerberos=")) {
                 kerberos = extractArgInput(arg);
+                if (kerberos == null) return -1;
             }
             else if (arg.startsWith("--kerberos")) {
                 kerberos = "VoltDBClient";
@@ -1289,7 +1355,9 @@ public class SQLCommand
                 }
             }
             else if (arg.startsWith("--output-format=")) {
-                String formatName = extractArgInput(arg).toLowerCase();
+                String formatName = extractArgInput(arg);
+                if (formatName == null) return -1;
+                formatName = formatName.toLowerCase();
                 if (formatName.equals("fixed")) {
                     m_outputFormatter = new SQLCommandOutputFormatterDefault();
                 }
@@ -1301,10 +1369,13 @@ public class SQLCommand
                 }
                 else {
                     printUsage("Invalid value for --output-format");
+                    return -1;
                 }
             }
             else if (arg.startsWith("--stop-on-error=")) {
-                String optionName = extractArgInput(arg).toLowerCase();
+                String optionName = extractArgInput(arg);
+                if (optionName == null) return -1;
+                optionName = optionName.toLowerCase();
                 if (optionName.equals("true")) {
                     m_stopOnError = true;
                 }
@@ -1313,24 +1384,41 @@ public class SQLCommand
                 }
                 else {
                     printUsage("Invalid value for --stop-on-error");
+                    return -1;
                 }
             }
             else if (arg.startsWith("--ddl-file=")) {
                 String ddlFilePath = extractArgInput(arg);
+                if (ddlFilePath == null) return -1;
                 try {
-                    ddlFile = new Scanner(new File(ddlFilePath)).useDelimiter("\\Z").next();
+                    File ddlJavaFile = new File(ddlFilePath);
+                    Scanner scanner = new Scanner(ddlJavaFile);
+                    ddlFileText = scanner.useDelimiter("\\Z").next();
+                    scanner.close();
                 } catch (FileNotFoundException e) {
                     printUsage("DDL file not found at path:" + ddlFilePath);
+                    return -1;
                 }
             }
             else if (arg.startsWith("--query-timeout=")) {
                 m_hasBatchTimeout = true;
-                m_batchTimeout = Integer.valueOf(extractArgInput(arg));
+                String batchTimeoutStr = extractArgInput(arg);
+                if (batchTimeoutStr == null) return -1;
+                m_batchTimeout = Integer.valueOf(batchTimeoutStr);
             }
 
             // equals check starting here
             else if (arg.equals("--output-skip-metadata")) {
                 m_outputShowMetadata = false;
+            }
+            else if (arg.startsWith("--ssl=")) {
+                enableSSL = true;
+                sslConfigFile = extractArgInput(arg);
+                if (sslConfigFile == null) return -1;
+            }
+            else if (arg.startsWith("--ssl")) {
+                enableSSL = true;
+                sslConfigFile = null;
             }
             else if (arg.equals("--debug")) {
                 m_debug = true;
@@ -1338,16 +1426,19 @@ public class SQLCommand
             else if (arg.equals("--help")) {
                 printHelp(System.out); // Print readme to the screen
                 System.out.println("\n\n");
-                printUsage(0);
+                printUsage();
+                return -1;
             }
             else if (arg.equals("--no-version-check")) {
                 m_versionCheck = false; // Disable new version phone home check
             }
             else if ((arg.equals("--usage")) || (arg.equals("-?"))) {
-                printUsage(0);
+                printUsage();
+                return -1;
             }
             else {
                 printUsage("Invalid Parameter: " + arg);
+                return -1;
             }
         }
 
@@ -1370,9 +1461,12 @@ public class SQLCommand
         }
 
         // Create connection
-        ClientConfig config = new ClientConfig(user, password);
+        ClientConfig config = new ClientConfig(user, password, null);
+        if (enableSSL && sslConfigFile != null && !sslConfigFile.trim().isEmpty()) {
+            config.setTrustStoreConfigFromPropertyFile(sslConfigFile);
+            config.enableSSL();
+        }
         config.setProcedureCallTimeout(0);  // Set procedure all to infinite timeout, see ENG-2670
-
         try {
             // if specified enable kerberos
             if (!kerberos.isEmpty()) {
@@ -1381,15 +1475,15 @@ public class SQLCommand
             m_client = getClient(config, servers, port);
         } catch (Exception exc) {
             System.err.println(exc.getMessage());
-            System.exit(-1);
+            return -1;
         }
 
         try {
-            if (! ddlFile.equals("")) {
+            if (! ddlFileText.equals("")) {
                 // fast DDL Loader mode
                 // System.out.println("fast DDL Loader mode with DDL input:\n" + ddlFile);
-                m_client.callProcedure("@AdHoc", ddlFile);
-                System.exit(m_exitCode);
+                m_client.callProcedure("@AdHoc", ddlFileText);
+                return m_exitCode;
             }
 
             // Load system procedures
@@ -1434,8 +1528,11 @@ public class SQLCommand
                 interactWithTheUser();
             }
         }
+        catch (SQLCmdEarlyExitException e) {
+            return m_exitCode;
+        }
         catch (Exception x) {
-            stopOrContinue(x);
+            try { stopOrContinue(x); } catch (SQLCmdEarlyExitException e) { return m_exitCode; }
         }
         finally {
             try { m_client.close(); } catch (Exception x) { }
@@ -1445,7 +1542,15 @@ public class SQLCommand
         // This might be a little unconventional for an interactive session,
         // but it's also likely to be ignored in that case, so "no great harm done".
         //* enable to debug */ System.err.println("Exiting with code " + m_exitCode);
-        System.exit(m_exitCode);
+        return m_exitCode;
+    }
+
+    // Application entry point
+    public static void main(String args[])
+    {
+        System.setProperty("voltdb_no_logging", "true");
+        int exitCode = mainWithReturnCode(args);
+        System.exit(exitCode);
     }
 
     // The following two methods implement a "phone home" version check for VoltDB.

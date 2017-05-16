@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -417,6 +417,18 @@ ExpressionUtil::functionFactory(int functionId, const std::vector<AbstractExpres
             break;
        case FUNC_SEC:
             ret = new UnaryFunctionExpression<FUNC_SEC>((*arguments)[0]);
+            break;
+        case FUNC_INET_NTOA:
+            ret = new UnaryFunctionExpression<FUNC_INET_NTOA>((*arguments)[0]);
+            break;
+        case FUNC_INET_ATON:
+            ret = new UnaryFunctionExpression<FUNC_INET_ATON>((*arguments)[0]);
+            break;
+        case FUNC_INET6_NTOA:
+            ret = new UnaryFunctionExpression<FUNC_INET6_NTOA>((*arguments)[0]);
+            break;
+        case FUNC_INET6_ATON:
+            ret = new UnaryFunctionExpression<FUNC_INET6_ATON>((*arguments)[0]);
             break;
         default:
             return NULL;

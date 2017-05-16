@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -145,6 +145,12 @@ public class AsyncBenchmark {
         @Option(desc = "Filename to write raw summary statistics to.")
         String statsfile = "";
 
+        @Option(desc = "Enable topology awareness")
+        boolean topologyaware = false;
+
+        @Option(desc = "Enable SSL, Optionally provide configuration file.")
+        String sslfile = "";
+
         @Override
         public void validate() {
             if (duration <= 0) exitWithMessageAndUsage("duration must be > 0");
@@ -189,7 +195,15 @@ public class AsyncBenchmark {
         this.config = config;
 
         ClientConfig clientConfig = new ClientConfig("", "", new StatusListener());
+        if (config.sslfile.trim().length() > 0) {
+            clientConfig.setTrustStoreConfigFromPropertyFile(config.sslfile);
+            clientConfig.enableSSL();
+        }
         clientConfig.setMaxTransactionsPerSecond(config.ratelimit);
+
+        if (config.topologyaware) {
+            clientConfig.setTopologyChangeAware(true);
+        }
 
         client = ClientFactory.createClient(clientConfig);
 
@@ -243,20 +257,24 @@ public class AsyncBenchmark {
         System.out.println("Connecting to VoltDB...");
 
         String[] serverArray = servers.split(",");
-        final CountDownLatch connections = new CountDownLatch(serverArray.length);
+        if (config.topologyaware) {
+            connectToOneServerWithRetry(serverArray[0]);
+        } else {
+            final CountDownLatch connections = new CountDownLatch(serverArray.length);
 
-        // use a new thread to connect to each server
-        for (final String server : serverArray) {
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    connectToOneServerWithRetry(server);
-                    connections.countDown();
-                }
-            }).start();
+            // use a new thread to connect to each server
+            for (final String server : serverArray) {
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        connectToOneServerWithRetry(server);
+                        connections.countDown();
+                    }
+                }).start();
+            }
+            // block until all have connected
+            connections.await();
         }
-        // block until all have connected
-        connections.await();
     }
 
     /**

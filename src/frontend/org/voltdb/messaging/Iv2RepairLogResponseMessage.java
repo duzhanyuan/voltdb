@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -23,11 +23,11 @@ import java.nio.ByteBuffer;
 import org.voltcore.messaging.VoltMessage;
 import org.voltcore.utils.CoreUtils;
 import org.voltcore.utils.Pair;
+import org.voltdb.iv2.TxnEgo;
 
 /**
- * Message from a client interface to an initiator, instructing the
- * site to begin executing a stored procedure, coordinating other
- * execution sites if needed.
+ * Message from replicas returning to new leader with repair log entries,
+ * while doing node rejoin promotion.
  *
  */
 public class Iv2RepairLogResponseMessage extends VoltMessage
@@ -210,9 +210,9 @@ public class Iv2RepairLogResponseMessage extends VoltMessage
         sb.append(" OF TOTAL: ");
         sb.append(m_ofTotal);
         sb.append(" SP HANDLE: ");
-        sb.append(m_handle);
+        sb.append(TxnEgo.txnIdToString(m_handle));
         sb.append(" TXNID: ");
-        sb.append(m_txnId);
+        sb.append(TxnEgo.txnIdToString(m_txnId));
         sb.append(" PAYLOAD: ");
         if (m_payload == null) {
             sb.append("null");

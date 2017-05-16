@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -27,7 +27,8 @@ public enum OpsSelector {
     SNAPSHOTSCAN(SnapshotScanAgent.class, HostMessenger.SNAPSHOTDELETE_SITE_ID),
     STATISTICS(StatsAgent.class, HostMessenger.STATS_SITE_ID),
     SYSTEMCATALOG(SystemCatalogAgent.class, HostMessenger.SYSCATALOG_SITE_ID),
-    SYSTEMINFORMATION(SystemInformationAgent.class, HostMessenger.SYSINFO_SITE_ID);
+    SYSTEMINFORMATION(SystemInformationAgent.class, HostMessenger.SYSINFO_SITE_ID),
+    TRACE(TraceAgent.class, HostMessenger.TRACE_SITE_ID);
 
     // OpsAgent subclass providing the implementation for this OPS selector
     private final Class<? extends OpsAgent> m_agentClass;

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -850,6 +850,9 @@ public class CoreUtils {
     public static String hsIdToString(long hsId) {
         return Integer.toString((int)hsId) + ":" + Integer.toString((int)(hsId >> 32));
     }
+    public static void hsIdToString(long hsId, StringBuilder sb) {
+        sb.append((int)hsId).append(":").append((int)(hsId >> 32));
+    }
 
     public static String hsIdCollectionToString(Collection<Long> ids) {
         List<String> idstrings = new ArrayList<String>();
@@ -1197,5 +1200,18 @@ public class CoreUtils {
         catch (Exception e) {
             log.fatal("Unable to list ports in use at this time.");
         }
+    }
+
+    // Utility method to figure out if this is a test case.  Various junit targets in
+    // build.xml set a environment variable to give us a hint
+    public static boolean isJunitTest() {
+
+        //check os environment variable
+        if ("true".equalsIgnoreCase(System.getenv().get("VOLT_JUSTATEST"))){
+            return true;
+        }
+
+        //check system variable
+        return "true".equalsIgnoreCase(System.getProperty("VOLT_JUSTATEST"));
     }
 }

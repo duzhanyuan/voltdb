@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -110,7 +110,10 @@ public class CompleteTransactionResponseMessage extends VoltMessage
     public String toString() {
         StringBuilder sb = new StringBuilder();
 
-        sb.append("COMPLETE_TRANSACTION_RESPONSE");
+        sb.append("COMPLETE_TRANSACTION_RESPONSE (FROM ");
+        sb.append(CoreUtils.hsIdToString(m_sourceHSId));
+        sb.append(" TO ");
+        sb.append(CoreUtils.hsIdToString(m_spiHSId));
         sb.append(" FOR TXN ID: ");
         sb.append(TxnEgo.txnIdToString(m_txnId));
         sb.append(" SPHANDLE: ");

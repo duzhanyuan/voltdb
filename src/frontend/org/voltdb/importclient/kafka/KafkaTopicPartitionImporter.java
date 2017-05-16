@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -22,11 +22,23 @@ import static java.util.Collections.singletonMap;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.LongBinaryOperator;
+
+import org.voltcore.logging.Level;
+import org.voltdb.client.ClientResponse;
+import org.voltdb.client.ProcedureCallback;
+import org.voltdb.importclient.kafka.KafkaStreamImporterConfig.HostAndPort;
+import org.voltdb.importer.AbstractImporter;
+import org.voltdb.importer.Invocation;
+import org.voltdb.importer.formatter.FormatException;
+import org.voltdb.importer.formatter.Formatter;
 
 import kafka.api.ConsumerMetadataRequest;
 import kafka.api.FetchRequest;
@@ -49,16 +61,8 @@ import kafka.javaapi.TopicMetadataRequest;
 import kafka.javaapi.consumer.SimpleConsumer;
 import kafka.message.MessageAndOffset;
 import kafka.network.BlockingChannel;
-
-import org.voltcore.logging.Level;
-import org.voltdb.ClientResponseImpl;
-import org.voltdb.client.ClientResponse;
-import org.voltdb.client.ProcedureCallback;
-import org.voltdb.importclient.kafka.KafkaStreamImporterConfig.HostAndPort;
-import org.voltdb.importer.AbstractImporter;
-import org.voltdb.importer.Invocation;
-import org.voltdb.importer.formatter.FormatException;
-import org.voltdb.importer.formatter.Formatter;
+import org.voltcore.utils.EstTime;
+import org.voltdb.importer.CommitTracker;
 
 /**
  * Implementation that imports from a Kafka topic. This is for a single partition of a Kafka topic.
@@ -70,23 +74,37 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
     private final static PartitionOffsetRequestInfo EARLIEST_OFFSET =
             new PartitionOffsetRequestInfo(kafka.api.OffsetRequest.EarliestTime(), 1);
 
+    public static final int KAFKA_IMPORTER_MAX_SHUTDOWN_WAIT_TIME_SECONDS = Integer.getInteger("KAFKA_IMPORTER_MAX_SHUTDOWN_WAIT_TIME_SECONDS", 60);
+
     private final int m_waitSleepMs = 1;
     private final AtomicBoolean m_dead = new AtomicBoolean(false);
     //Start with invalid so consumer will fetch it.
     private final AtomicLong m_currentOffset = new AtomicLong(-1);
+    // CAUTION: m_pauseOffset is not reliable until all callbacks have completed.
+    private final AtomicLong m_pauseOffset = new AtomicLong(-1);
     private long m_lastCommittedOffset = -1;
-    private final AtomicReference<BlockingChannel> m_offsetManager = new AtomicReference<BlockingChannel>();
+    private final AtomicReference<BlockingChannel> m_offsetManager = new AtomicReference<>();
     private SimpleConsumer m_consumer = null;
     private final TopicAndPartition m_topicAndPartition;
-    private final Gap m_gapTracker = new Gap(Integer.getInteger("KAFKA_IMPORT_GAP_LEAD", 32_768));
+    private final CommitTracker m_gapTracker;
+    private final int m_gapFullWait = Integer.getInteger("KAFKA_IMPORT_GAP_WAIT", 2_000);
     private final KafkaStreamImporterConfig m_config;
     private HostAndPort m_coordinator;
+    private final FetchRequestBuilder m_fetchRequestBuilder;
+    boolean noTransaction = false;
+    //Counters for commit policies.
+    private long m_lastCommitTime = 0;
 
     public KafkaTopicPartitionImporter(KafkaStreamImporterConfig config)
     {
         m_config = config;
         m_coordinator = m_config.getPartitionLeader();
         m_topicAndPartition = new TopicAndPartition(config.getTopic(), config.getPartition());
+        m_fetchRequestBuilder = new FetchRequestBuilder().clientId(KafkaStreamImporterConfig.CLIENT_ID);
+        if (m_config.getCommitPolicy() == KafkaImporterCommitPolicy.TIME && m_config.getTriggerValue() > 0)
+            m_gapTracker = new SimpleTracker();
+        else
+            m_gapTracker = new DurableTracker(Integer.getInteger("KAFKA_IMPORT_GAP_LEAD", 32_768));
     }
 
     @Override
@@ -129,6 +147,13 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
         return returnMetaData;
     }
 
+    private int nextCorrelationId() {
+        FetchRequest fr = m_fetchRequestBuilder.addFetch(m_topicAndPartition.topic(),
+                m_topicAndPartition.partition(), 1L, m_config.getFetchSize())
+                .build();
+        return fr.correlationId();
+    }
+
     //Find leader for this topic partition.
     private HostAndPort findNewLeader() {
         for (int i = 0; i < 3; i++) {
@@ -156,7 +181,6 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
 
     public void getOffsetCoordinator() {
         KafkaStreamImporterException probeException = null;
-        int correlationId = 0;
 
         OUTER: for (int attempts = 0; attempts < 3; ++attempts) {
             for (HostAndPort hp: m_config.getBrokers()) {
@@ -172,7 +196,7 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
                     channel.send(new ConsumerMetadataRequest(
                             m_config.getGroupId(),
                             ConsumerMetadataRequest.CurrentVersion(),
-                            correlationId++,
+                            nextCorrelationId(),
                             KafkaStreamImporterConfig.CLIENT_ID
                             ));
                     ConsumerMetadataResponse metadataResponse = ConsumerMetadataResponse.readFrom(channel.receive().buffer());
@@ -252,17 +276,16 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
 
     private OffsetFetchResponse getClientTopicOffset() {
         final short version = 1;
-        final int correlationId = m_topicAndPartition.partition();
-        final OffsetFetchRequest rq = new OffsetFetchRequest(
-                m_config.getGroupId(),
-                singletonList(m_topicAndPartition),
-                version, correlationId,
-                KafkaStreamImporterConfig.CLIENT_ID
-                );
         OffsetFetchResponse rsp = null;
         Throwable fault = null;
 
         for (int attempts = 0; attempts < 3; ++attempts) try {
+            final OffsetFetchRequest rq = new OffsetFetchRequest(
+                    m_config.getGroupId(),
+                    singletonList(m_topicAndPartition),
+                    version, nextCorrelationId(),
+                    KafkaStreamImporterConfig.CLIENT_ID
+                    );
             BlockingChannel channel = m_offsetManager.get();
             channel.send(rq.underlying());
             rsp = OffsetFetchResponse.readFrom(channel.receive().buffer());
@@ -357,8 +380,8 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
     protected void accept() {
         info(null, "Starting partition fetcher for " + m_topicAndPartition);
         long submitCount = 0;
-        AtomicLong cbcnt = new AtomicLong(0);
-        Formatter<String> formatter = (Formatter<String>) m_config.getFormatterBuilder().create();
+        PendingWorkTracker callbackTracker = new PendingWorkTracker();
+        Formatter formatter = m_config.getFormatterBuilder().create();
         try {
             //Start with the starting leader.
             resetLeader();
@@ -392,8 +415,7 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
                 }
                 long currentFetchCount = 0;
                 //Build fetch request of we have a valid offset and not too many are pending.
-                FetchRequest req = new FetchRequestBuilder().clientId(KafkaStreamImporterConfig.CLIENT_ID)
-                        .addFetch(m_topicAndPartition.topic(),
+                FetchRequest req = m_fetchRequestBuilder.addFetch(m_topicAndPartition.topic(),
                                 m_topicAndPartition.partition(), m_currentOffset.get(), m_config.getFetchSize())
                                 .build();
                 FetchResponse fetchResponse = null;
@@ -432,7 +454,6 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
                 }
                 sleepCounter = 1;
                 for (MessageAndOffset messageAndOffset : fetchResponse.messageSet(m_topicAndPartition.topic(), m_topicAndPartition.partition())) {
-
                     //You may be catchin up so dont sleep.
                     currentFetchCount++;
                     long currentOffset = messageAndOffset.offset();
@@ -441,29 +462,27 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
                     if (currentOffset < m_currentOffset.get()) {
                         continue;
                     }
-
-                    if (currentOffset > m_currentOffset.get()) {
-                        if (isDebugEnabled()) {
-                            debug(null, "Kafka messageAndOffset currentOffset %d is ahead of m_currentOffset %d.", currentOffset, m_currentOffset.get());
-                          }
-                    }
                     ByteBuffer payload = messageAndOffset.message().payload();
-
-                    String line = new String(payload.array(),payload.arrayOffset(),payload.limit(),StandardCharsets.UTF_8);
-                    try{
-                        Invocation invocation = new Invocation(m_config.getProcedure(), formatter.transform(line));
-                        TopicPartitionInvocationCallback cb = new TopicPartitionInvocationCallback(
-                                messageAndOffset.nextOffset(), cbcnt, m_gapTracker, m_dead,
-                                invocation);
-                         if (!callProcedure(invocation, cb)) {
-                              if (isDebugEnabled()) {
-                                 debug(null, "Failed to process Invocation possibly bad data: " + line);
-                               }
-                               m_gapTracker.commit(currentOffset);
+                    Object params[] = null;
+                    try {
+                        m_gapTracker.submit(messageAndOffset.nextOffset());
+                        params = formatter.transform(payload);
+                        Invocation invocation = new Invocation(m_config.getProcedure(), params);
+                        TopicPartitionInvocationCallback cb = new TopicPartitionInvocationCallback(messageAndOffset.offset(),
+                                messageAndOffset.nextOffset(), callbackTracker, m_gapTracker, m_dead, m_pauseOffset);
+                        if (!noTransaction) {
+                            if (callProcedure(invocation, cb)) {
+                                callbackTracker.produceWork();
+                            } else {
+                                if (isDebugEnabled()) {
+                                    debug(null, "Failed to process Invocation possibly bad data: " + Arrays.toString(params));
+                                }
+                                m_gapTracker.commit(messageAndOffset.nextOffset());
+                            }
                          }
-                     } catch (FormatException e){
-                        rateLimitedLog(Level.WARN, e, "Failed to tranform data: %s" ,line);
-                        m_gapTracker.commit(currentOffset);
+                    } catch (FormatException e) {
+                        rateLimitedLog(Level.WARN, e, "Failed to tranform data: %s" , Arrays.toString(params));
+                        m_gapTracker.commit(messageAndOffset.nextOffset());
                     }
                     submitCount++;
                     m_currentOffset.set(messageAndOffset.nextOffset());
@@ -482,12 +501,30 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
                         } catch (InterruptedException ie) {
                         }
                 }
-                commitOffset();
+                if (shouldCommit()) {
+                    commitOffset(false);
+                }
             }
         } catch (Exception ex) {
             error(ex, "Failed to start topic partition fetcher for " + m_topicAndPartition);
         } finally {
-            commitOffset();
+            final boolean usePausedOffset = m_pauseOffset.get() != -1;
+            boolean skipCommit = false;
+            if (usePausedOffset) {
+                // Paused offset is not guaranteed reliable until all callbacks have been called.
+                if (callbackTracker.waitForWorkToFinish() == false) {
+                    if (m_pauseOffset.get() < m_lastCommittedOffset) {
+                        warn(null, "Committing paused offset even though a timeout occurred waiting for pending stored procedures to finish.");
+                    } else {
+                        warn(null, "Refusing to commit paused offset because a timeout occurred waiting for pending stored procedures to finish.");
+                        skipCommit = true;
+                    }
+                }
+            }
+            if (skipCommit == false) {
+                // Force a commit. Paused offset will be re-acquired if needed.
+                commitOffset(usePausedOffset);
+            }
             KafkaStreamImporterConfig.closeConsumer(m_consumer);
             m_consumer = null;
             BlockingChannel channel = m_offsetManager.getAndSet(null);
@@ -498,38 +535,58 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
         m_dead.compareAndSet(false, true);
         info(null, "Partition fetcher stopped for " + m_topicAndPartition
                 + " Last commit point is: " + m_lastCommittedOffset
-                + " Callback Rcvd: " + cbcnt.get()
+                + " Callback Rcvd: " + callbackTracker.getCallbackCount()
                 + " Submitted: " + submitCount);
 
     }
 
-    public boolean commitOffset() {
-        final int correlationId = m_topicAndPartition.partition();
-        final short version = 1;
+    //Based on commit policy
+    public boolean shouldCommit() {
+        switch(m_config.getCommitPolicy()) {
+            case TIME:
+                return (EstTime.currentTimeMillis() > (m_lastCommitTime + m_config.getTriggerValue()));
+        }
+        return true;
+    }
 
-        final long safe = m_gapTracker.commit(-1L);
-        if (safe > m_lastCommittedOffset) {
+    public void resetCounters() {
+        switch(m_config.getCommitPolicy()) {
+            case TIME:
+                m_lastCommitTime = EstTime.currentTimeMillis();
+        }
+    }
+
+    public boolean commitOffset(boolean usePausedOffset) {
+        final short version = 1;
+        long safe = m_gapTracker.commit(-1L);
+        final long pausedOffset = usePausedOffset ? m_pauseOffset.get() : -1;
+
+        if (m_lastCommittedOffset != pausedOffset && (safe > m_lastCommittedOffset || pausedOffset != -1)) {
             long now = System.currentTimeMillis();
-            OffsetCommitRequest offsetCommitRequest = new OffsetCommitRequest(
-                    m_config.getGroupId(),
-                    singletonMap(m_topicAndPartition, new OffsetAndMetadata(safe, "commit", now)),
-                    correlationId,
-                    KafkaStreamImporterConfig.CLIENT_ID,
-                    version
-                    );
             OffsetCommitResponse offsetCommitResponse = null;
             try {
                 BlockingChannel channel = null;
                 int retries = 3;
+                if (pausedOffset != -1) {
+                    rateLimitedLog(Level.INFO, null, m_topicAndPartition + " is using paused offset to commit: " + pausedOffset);
+                }
                 while (channel == null && --retries >= 0) {
                     if ((channel = m_offsetManager.get()) == null) {
                         getOffsetCoordinator();
                         rateLimitedLog(Level.ERROR, null, "Commit Offset Failed to get offset coordinator for " + m_topicAndPartition);
                         continue;
                     }
+                    safe = (pausedOffset != -1 ? pausedOffset : safe);
+                    OffsetCommitRequest offsetCommitRequest = new OffsetCommitRequest(
+                            m_config.getGroupId(),
+                            singletonMap(m_topicAndPartition, new OffsetAndMetadata(safe, "commit", now)),
+                            nextCorrelationId(),
+                            KafkaStreamImporterConfig.CLIENT_ID,
+                            version
+                            );
                     channel.send(offsetCommitRequest.underlying());
                     offsetCommitResponse = OffsetCommitResponse.readFrom(channel.receive().buffer());
-                    final short code = ((Short) offsetCommitResponse.errors().get(m_topicAndPartition));
+                    final short code = ((Short)offsetCommitResponse.errors().get(m_topicAndPartition)).shortValue();
                     if (code == ErrorMapping.NotCoordinatorForConsumerCode() || code == ErrorMapping.ConsumerCoordinatorNotAvailableCode()) {
                         info(null, "Not coordinator for committing offset for " + m_topicAndPartition + " Updating coordinator.");
                         getOffsetCoordinator();
@@ -547,40 +604,66 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
                 }
                 return false;
             }
-            final short code = ((Short) offsetCommitResponse.errors().get(m_topicAndPartition));
+            final short code = ((Short) offsetCommitResponse.errors().get(m_topicAndPartition)).shortValue();
             if (code != ErrorMapping.NoError()) {
                 final String msg = "Commit Offset Failed to commit for " + m_topicAndPartition;
                 rateLimitedLog(Level.ERROR, ErrorMapping.exceptionFor(code), msg);
                 return false;
             }
             m_lastCommittedOffset = safe;
+            resetCounters();
+            return true;
         }
 
-        return true;
+        return false;
     }
 
-    final class Gap {
+    //Simple tracker used for timed based commit.
+    final class SimpleTracker implements CommitTracker {
+        private final AtomicLong m_commitPoint = new AtomicLong(-1);
+        @Override
+        public void submit(long offset) {
+            //NoOp
+        }
+
+        @Override
+        public long commit(long commit) {
+            return m_commitPoint.accumulateAndGet(commit, new LongBinaryOperator() {
+                @Override
+                public long applyAsLong(long orig, long newval) {
+                    return (orig > newval) ? orig : newval;
+                }
+            });
+        }
+
+        @Override
+        public void resetTo(long offset) {
+            m_commitPoint.set(offset);
+        }
+    }
+
+    final class DurableTracker implements CommitTracker {
         long c = 0;
         long s = -1L;
         long offer = -1L;
         final long [] lag;
-        private final long gapTrackerCheckMaxTimeMs = 2_000;
 
-        Gap(int leeway) {
+        DurableTracker(int leeway) {
             if (leeway <= 0) {
                 throw new IllegalArgumentException("leeways is zero or negative");
             }
             lag = new long[leeway];
         }
 
-        synchronized void submit(long offset) {
+        @Override
+        public synchronized void submit(long offset) {
             if (s == -1L && offset >= 0) {
                 lag[idx(offset)] = c = s = offset;
             }
             if ((offset - c) >= lag.length) {
                 offer = offset;
                 try {
-                    wait(gapTrackerCheckMaxTimeMs);
+                    wait(m_gapFullWait);
                 } catch (InterruptedException e) {
                     rateLimitedLog(Level.WARN, e, "Gap tracker wait was interrupted for" + m_topicAndPartition);
                 }
@@ -594,7 +677,8 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
             return (int)(offset % lag.length);
         }
 
-        synchronized void resetTo(long offset) {
+        @Override
+        public synchronized void resetTo(long offset) {
             if (offset < 0) {
                 throw new IllegalArgumentException("offset is negative");
             }
@@ -602,7 +686,8 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
             offer = -1L;
         }
 
-        synchronized long commit(long offset) {
+        @Override
+        public synchronized long commit(long offset) {
             if (offset <= s && offset > c) {
                 int ggap = (int)Math.min(lag.length, offset-c);
                 if (ggap == lag.length) {
@@ -626,6 +711,43 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
         }
     }
 
+    /** Tracks number of async procedures still in flight.
+     * Requires at most one producer.
+     * Allows any number of consumers.
+     * Allows reporting of the number of work items consumed as a statistic.
+     */
+    private static class PendingWorkTracker {
+        private volatile long m_workProduced = 0;
+        private LongAdder     m_workConsumed = new LongAdder();
+
+        public void produceWork() {
+            m_workProduced++;
+        }
+
+        public void consumeWork() {
+            m_workConsumed.increment();
+        }
+
+        /** @return true if successful, false if waiting timed out */
+        public boolean waitForWorkToFinish() {
+            final int attemptIntervalMs = 100;
+            final int maxAttempts = (int) (TimeUnit.SECONDS.toMillis(KAFKA_IMPORTER_MAX_SHUTDOWN_WAIT_TIME_SECONDS) / attemptIntervalMs);
+            int attemptCount = 0;
+            while (m_workProduced != m_workConsumed.longValue() && attemptCount < maxAttempts) {
+                try {
+                    Thread.sleep(attemptIntervalMs);
+                } catch (InterruptedException unexpected) {
+                }
+                attemptCount++;
+            }
+            return m_workProduced == m_workConsumed.longValue();
+        }
+
+        public long getCallbackCount() {
+            return m_workConsumed.longValue();
+        }
+    }
+
     @Override
     public String getName()
     {
@@ -633,47 +755,62 @@ public class KafkaTopicPartitionImporter extends AbstractImporter
     }
 
     @Override
+    public String getTaskThreadName() {
+        return getName() + " - " + (m_topicAndPartition == null ? "Unknown" : m_topicAndPartition.toString());
+    }
+
+    @Override
     protected void stop()
     {
-        // Nothing to stop. shouldRun() should take care of exiting the work loop.
     }
 
     //Per topic per partition that we are responsible for.
     //Callback for each invocation we have submitted.
     private final static class TopicPartitionInvocationCallback implements ProcedureCallback
     {
+        private final long m_nextoffset;
         private final long m_offset;
-        private final AtomicLong m_cbcnt;
-        private final Gap m_tracker;
+        private final PendingWorkTracker m_callbackTracker;
+        private final CommitTracker m_tracker;
         private final AtomicBoolean m_dontCommit;
-        private final Invocation m_invocation;
+        private final AtomicLong m_pauseOffset;
 
         public TopicPartitionInvocationCallback(
-                final long offset,
-                final AtomicLong cbcnt,
-                final Gap tracker,
+                final long curoffset,
+                final long nextoffset,
+                final PendingWorkTracker callbackTracker,
+                final CommitTracker tracker,
                 final AtomicBoolean dontCommit,
-                final Invocation invocation) {
-            m_offset = offset;
-            m_cbcnt = cbcnt;
+                final AtomicLong pauseOffset) {
+            m_offset = curoffset;
+            m_nextoffset = nextoffset;
+            m_callbackTracker = callbackTracker;
             m_tracker = tracker;
             m_dontCommit = dontCommit;
-            m_tracker.submit(m_offset);
-            m_invocation = invocation;
+            m_pauseOffset = pauseOffset;
+        }
+
+        private static class PausedOffsetCalculator implements LongBinaryOperator {
+            @Override
+            public long applyAsLong(long currentValue, long givenUpdate) {
+                if (currentValue == -1){
+                    return givenUpdate;
+                } else {
+                    return Math.min(currentValue, givenUpdate);
+                }
+            }
         }
 
         @Override
         public void clientCallback(ClientResponse response) throws Exception {
 
-            m_cbcnt.incrementAndGet();
-            if (!m_dontCommit.get() && response.getStatus() != ClientResponseImpl.SERVER_UNAVAILABLE) {
-                m_tracker.commit(m_offset);
+            m_callbackTracker.consumeWork();
+            if (!m_dontCommit.get() && response.getStatus() != ClientResponse.SERVER_UNAVAILABLE) {
+                m_tracker.commit(m_nextoffset);
             }
-        }
-
-        @SuppressWarnings("unused")
-        public Invocation getInvocation() {
-            return m_invocation;
+            if (response.getStatus() == ClientResponse.SERVER_UNAVAILABLE) {
+                m_pauseOffset.accumulateAndGet(m_offset, new PausedOffsetCalculator());
+            }
         }
     }
 }

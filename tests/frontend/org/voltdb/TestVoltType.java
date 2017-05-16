@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -26,10 +26,11 @@ package org.voltdb;
 import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-
-import junit.framework.TestCase;
+import java.util.TimeZone;
 
 import org.voltdb.types.TimestampType;
+
+import junit.framework.TestCase;
 
 public class TestVoltType extends TestCase {
 
@@ -270,15 +271,18 @@ public class TestVoltType extends TestCase {
 
     public void testTimestampToStringBeforeEpoch() {
         long micros = -48932323284323L;
+        TimeZone tz = TimeZone.getTimeZone("America/New_York");
         TimestampType beforeEpoch = new TimestampType(micros);
-        assertEquals("1968-06-13 11:41:16.715677", beforeEpoch.toString());
+        String answer = beforeEpoch.toString(tz);
+        assertEquals("1968-06-13 11:41:16.715677", answer);
         assertEquals(micros, beforeEpoch.getTime());
 
         // test Long.MIN as NULL_TimestampType
         // NULL_TimestampType is translated to VoltType.NULL_BIGINT in
         // @see org.voltdb.ParameterSet#flattenToBuffer()
         beforeEpoch = new TimestampType(VoltType.NULL_BIGINT);
-        assertEquals("290303-12-10 14:59:05.224192", beforeEpoch.toString());
+        answer = beforeEpoch.toString(tz);
+        assertEquals("290303-12-10 14:59:05.224192", answer);
         assertEquals(VoltType.NULL_BIGINT, beforeEpoch.getTime());
     }
 

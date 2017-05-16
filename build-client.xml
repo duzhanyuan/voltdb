@@ -22,7 +22,7 @@
         <javac
             target="1.7"
             source="1.7"
-            bootclasspath="${vendor.lib.dir}/classes-java1.7.jar"
+            bootclasspath="${vendor.lib.dir}/classes-java1.7.jar:${vendor.lib.dir}/bouncy-castle-jce.jar"
             srcdir="@{srcdir}"
             destdir="@{destdir}"
             excludes="@{excludes}"
@@ -72,6 +72,18 @@
     <fileset dir='${vendor.lib.dir}'>
         <include name='javaee-api-6.0.jar' />
     </fileset>
+    <fileset dir='${vendor.lib.dir}'>
+        <include name='javassist-3.20.0-GA.jar' />
+    </fileset>
+    <fileset dir='${lib.dir}'>
+        <include name='log4j-1.2.16.jar' />
+    </fileset>
+	<fileset dir='${lib.dir}'>
+        <include name='commons-logging-1.1.3.jar' />
+    </fileset>
+	<fileset dir='${lib.dir}'>
+        <include name='slf4j-api-1.6.2.jar' />
+    </fileset>
     <pathelement path="${java.class.path}"/>
 </path>
 
@@ -90,12 +102,15 @@
                   org/json_voltpatches/**/*.java
                   jsr166y/**/*.java
                   io/netty_voltpatches/NinjaKeySet.java
+                  io/netty_voltpatches/**/*.java
+                  org/jctools_voltpatches/**/*.java
                   "
 />
 
 <fileset id="client.src.files" dir="${src.gpl.dir}"
         includes="org/voltcore/logging/Level.java
                   org/voltcore/logging/VoltLogger.java
+                  org/voltcore/logging/VoltNullLogger.java
                   org/voltcore/logging/VoltUtilLoggingLogger.java
                   org/voltcore/network/*.java
 
@@ -111,9 +126,18 @@
                   org/voltcore/utils/Pair.java
                   org/voltcore/utils/RateLimitedLogger.java
                   org/voltcore/utils/Bits.java
+                  org/voltcore/utils/FlexibleSemaphore.java
                   org/voltcore/utils/LatencyWatchdog.java
                   org/voltcore/utils/CompressionStrategy.java
                   org/voltcore/utils/VoltTypeUtil.java
+                  org/voltcore/utils/ssl/MessagingChannel.java
+                  org/voltcore/utils/ssl/SSLMessagingChannel.java
+                  org/voltcore/utils/ssl/TLSMessagingChannel.java
+                  org/voltcore/utils/ssl/SSLEncryptionService.java
+                  org/voltcore/utils/ssl/SSLMessageParser.java
+                  org/voltcore/utils/ssl/SSLBufferDecrypter.java
+                  org/voltcore/utils/ssl/SSLBufferEncrypter.java
+                  org/voltcore/utils/ssl/SSLConfiguration.java
 
                   org/voltdb/CLIConfig.java
                   org/voltdb/client/**/*.java
@@ -150,17 +174,17 @@
                   "
 />
 
+
 <!--
 ***************************************
 PRIMARY ENTRY POINTS
 ***************************************
 -->
-
+    
 <target name="default"
     depends="compile, voltdbclient.jar"
     description="Compile Java client classes builds the client/jdbc Jarfile."
 />
-
 <!--
 ***************************************
 DISTRIBUTION

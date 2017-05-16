@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -32,7 +32,6 @@ import org.hsqldb_voltpatches.HSQLInterface;
 import org.json_voltpatches.JSONException;
 import org.json_voltpatches.JSONObject;
 import org.voltdb.catalog.Catalog;
-import org.voltdb.catalog.Cluster;
 import org.voltdb.catalog.Database;
 import org.voltdb.catalog.Procedure;
 import org.voltdb.catalog.Statement;
@@ -53,7 +52,6 @@ import org.voltdb.utils.BuildDirectoryUtils;
  */
 public class PlannerTestAideDeCamp {
 
-    private final Catalog catalog;
     private final Procedure proc;
     private final HSQLInterface hsql;
     private final Database db;
@@ -68,12 +66,12 @@ public class PlannerTestAideDeCamp {
      * @throws Exception
      */
     public PlannerTestAideDeCamp(URL ddlurl, String basename) throws Exception {
-        String pth = ddlurl.getPath();
+        assert(ddlurl != null);
         String schemaPath = URLDecoder.decode(ddlurl.getPath(), "UTF-8");
-        VoltCompiler compiler = new VoltCompiler();
+        VoltCompiler compiler = new VoltCompiler(false);
         hsql = HSQLInterface.loadHsqldb();
         VoltCompiler.DdlProceduresToLoad no_procs = DdlProceduresToLoad.NO_DDL_PROCEDURES;
-        catalog = compiler.loadSchema(hsql, no_procs, schemaPath);
+        compiler.loadSchema(hsql, no_procs, schemaPath);
         db = compiler.getCatalogDatabase();
         proc = db.getProcedures().add(basename);
     }
@@ -145,8 +143,7 @@ public class PlannerTestAideDeCamp {
             partitioning = StatementPartitioning.forceMP();
         }
         String procName = catalogStmt.getParent().getTypeName();
-        Cluster catalogCluster = catalog.getClusters().get("cluster");
-        QueryPlanner planner = new QueryPlanner(sql, stmtLabel, procName, catalogCluster, db,
+        QueryPlanner planner = new QueryPlanner(sql, stmtLabel, procName, db,
                 partitioning, hsql, estimates, false, StatementCompiler.DEFAULT_MAX_JOIN_TABLES,
                 costModel, null, joinOrder, detMode);
 
@@ -210,6 +207,9 @@ public class PlannerTestAideDeCamp {
         return plannodes;
     }
 
+    public Catalog getCatalog() {
+        return db.getCatalog();
+    }
     public String getCatalogString() {
         return db.getCatalog().serialize();
     }

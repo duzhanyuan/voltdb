@@ -1,5 +1,5 @@
 # This file is part of VoltDB.
-# Copyright (C) 2008-2016 VoltDB Inc.
+# Copyright (C) 2008-2017 VoltDB Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -16,9 +16,9 @@
 
 import unittest
 import requests
-import xmlrunner
 from xml.etree import ElementTree
 import socket
+import xmlrunner
 
 __host_name__ = socket.gethostname()
 __host_or_ip__ = socket.gethostbyname(__host_name__)
@@ -206,9 +206,6 @@ class UpdateDatabase(DatabaseServer):
                             if subnode.tag == "resourcemonitor":
                                 for supersubnode in subnode:
                                     self.assertEqual(supersubnode.attrib['size'], "80%")
-                    if child.tag == "admin-mode":
-                        self.assertEqual(child.attrib['adminstartup'], "false")
-                        self.assertEqual(child.attrib['port'], "21211")
                     if child.tag == "cluster":
                         self.assertEqual(child.attrib['elastic'], "enabled")
                         self.assertEqual(child.attrib['hostcount'], "1")
@@ -225,8 +222,6 @@ class UpdateDatabase(DatabaseServer):
                         self.assertEqual(child.attrib['provider'], "hash")
                     if child.tag == "partition-detection":
                         self.assertEqual(child.attrib['enabled'], "true")
-                        for subnode in child:
-                            self.assertEqual(subnode.attrib['prefix'], "voltdb_partition_detection")
 
 
 class UpdateMember(DatabaseServer):
@@ -275,9 +270,8 @@ class Deployment(unittest.TestCase):
                       "exportoverflow":
                           {"path": "export_overflow"}, "commandlog": {"path": "command_logtest"},
                       "commandlogsnapshot": {"path": "command_log_snapshot"}},
-            "partition-detection": {"snapshot": {"prefix": "voltdb_partition_detection"},
-                                    "enabled": True},
-            "admin-mode": {"port": 21211, "adminstartup": False}, "heartbeat": {"timeout": 90},
+            "partition-detection": {"enabled": True},
+            "heartbeat": {"timeout": 90},
             "httpd": {"jsonapi": {"enabled": True}, "port": 8080, "enabled": True},
             "snapshot": {"frequency": "1h", "retain": 1,
                          "prefix": "AUTOSNAP", "enabled": False},
@@ -298,7 +292,8 @@ class Deployment(unittest.TestCase):
                                           "stream": "test", "property": [{"name": "metadata.broker.list",
                                                                           "value": "test"}]}]},
             "import": {"configuration": [{"enabled": False, "type": "kafka", "module": "test", "format": "test",
-                                          "property": [{"name": "metadata.broker.list", "value": "test"}]}]}
+                                          "property": [{"name": "metadata.broker.list", "value": "test"}]}]},
+            "dr": {"id": 1, "port": 12, "listen": True, "role": "replica", "connection": {"source": "127.0.0.1"}}
         }
 
         response = requests.put(url_dep,
@@ -370,10 +365,6 @@ class UpdateDatabaseDeployment(Deployment):
                                         for disklimit in supersubnode:
                                             self.assertEqual(disklimit.attrib['name'], "snapshots")
                                             self.assertEqual(disklimit.attrib['size'], "2")
-
-                    if child.tag == "admin-mode":
-                        self.assertEqual(child.attrib['adminstartup'], "false")
-                        self.assertEqual(child.attrib['port'], "21211")
                     if child.tag == "cluster":
                         self.assertEqual(child.attrib['elastic'], "enabled")
                         self.assertEqual(child.attrib['hostcount'], "1")
@@ -390,10 +381,13 @@ class UpdateDatabaseDeployment(Deployment):
                         self.assertEqual(child.attrib['provider'], "HASH")
                     if child.tag == "partition-detection":
                         self.assertEqual(child.attrib['enabled'], "true")
-                        for subnode in child:
-                            self.assertEqual(subnode.attrib['prefix'], "voltdb_partition_detection")
-
+                    if child.tag == "dr":
+                        self.assertEqual(child.attrib['id'], "1")
+                        self.assertEqual(child.attrib['port'], "12")
+                        self.assertEqual(child.attrib['listen'], "true")
+                        self.assertEqual(child.attrib['role'], "replica")
+                        for sub_node in child:
+                            self.assertEqual(sub_node.attrib['source'], "127.0.0.1")
 
 if __name__ == '__main__':
     unittest.main(testRunner=xmlrunner.XMLTestRunner(output='test-reports'))
-    unittest.main()

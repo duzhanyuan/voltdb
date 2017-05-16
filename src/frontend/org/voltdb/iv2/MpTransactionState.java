@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -34,7 +34,6 @@ import org.voltcore.utils.CoreUtils;
 import org.voltdb.SiteProcedureConnection;
 import org.voltdb.StoredProcedureInvocation;
 import org.voltdb.VoltTable;
-import org.voltdb.client.ProcedureInvocationType;
 import org.voltdb.dtxn.TransactionState;
 import org.voltdb.exceptions.SerializableException;
 import org.voltdb.exceptions.TransactionRestartException;
@@ -43,10 +42,12 @@ import org.voltdb.messaging.DumpMessage;
 import org.voltdb.messaging.FragmentResponseMessage;
 import org.voltdb.messaging.FragmentTaskMessage;
 import org.voltdb.messaging.Iv2InitiateTaskMessage;
+import org.voltdb.utils.MiscUtils;
 import org.voltdb.utils.VoltTableUtil;
 
 import com.google_voltpatches.common.base.Preconditions;
 import com.google_voltpatches.common.collect.Maps;
+import org.voltdb.utils.VoltTrace;
 
 public class MpTransactionState extends TransactionState
 {
@@ -162,16 +163,21 @@ public class MpTransactionState extends TransactionState
                 task.setStateForDurability((Iv2InitiateTaskMessage) getNotice(), m_masterHSIds.keySet());
             }
 
-            if (ProcedureInvocationType.isDeprecatedInternalDRType(m_initiationMsg.getStoredProcedureInvocation().getType())) {
-                task.setOriginalTxnId(m_initiationMsg.getStoredProcedureInvocation().getOriginalTxnId());
-            }
-
             m_remoteWork = task;
             m_remoteWork.setTruncationHandle(m_initiationMsg.getTruncationHandle());
             // Distribute fragments to remote destinations.
             long[] non_local_hsids = new long[m_useHSIds.size()];
             for (int i = 0; i < m_useHSIds.size(); i++) {
                 non_local_hsids[i] = m_useHSIds.get(i);
+
+                int finalI = i;
+                final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.MPSITE);
+                if (traceLog != null) {
+                    traceLog.add(() -> VoltTrace.beginAsync("sendfragment",
+                                                            MiscUtils.hsIdPairTxnIdToString(m_mbox.getHSId(), non_local_hsids[finalI], txnId, task.getCurrentBatchIndex()),
+                                                            "txnId", TxnEgo.txnIdToString(txnId),
+                                                            "dest", CoreUtils.hsIdToString(non_local_hsids[finalI])));
+                }
             }
             // send to all non-local sites
             if (non_local_hsids.length > 0) {
@@ -184,8 +190,7 @@ public class MpTransactionState extends TransactionState
     }
 
     private static Map<Integer, Set<Long>>
-    createTrackedDependenciesFromTask(FragmentTaskMessage task,
-                                      List<Long> expectedHSIds)
+        createTrackedDependenciesFromTask(FragmentTaskMessage task, List<Long> expectedHSIds)
     {
         Map<Integer, Set<Long>> depMap = new HashMap<Integer, Set<Long>>();
         for (int i = 0; i < task.getFragmentCount(); i++) {
@@ -202,6 +207,8 @@ public class MpTransactionState extends TransactionState
     @Override
     public Map<Integer, List<VoltTable>> recursableRun(SiteProcedureConnection siteConnection)
     {
+        final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.MPSITE);
+
         // if we're restarting this transaction, and we only have local work, add some dummy
         // remote work so that we can avoid injecting a borrow task into the local buddy site
         // before the CompleteTransactionMessage with the restart flag reaches it.
@@ -244,6 +251,12 @@ public class MpTransactionState extends TransactionState
             // cause ProcedureRunner to do the right thing and cause rollback.
             while (!checkDoneReceivingFragResponses()) {
                 FragmentResponseMessage msg = pollForResponses();
+                if (traceLog != null) {
+                    final int batchIdx = m_remoteWork.getCurrentBatchIndex();
+                    traceLog.add(() -> VoltTrace.endAsync("sendfragment",
+                                                          MiscUtils.hsIdPairTxnIdToString(m_mbox.getHSId(), msg.m_sourceHSId, txnId, batchIdx),
+                                                          "status", Byte.toString(msg.getStatusCode())));
+                }
                 boolean expectedMsg = handleReceivedFragResponse(msg);
                 if (expectedMsg) {
                     // Will roll-back and throw if this message has an exception
@@ -256,17 +269,33 @@ public class MpTransactionState extends TransactionState
         m_remoteWork = null;
 
         BorrowTaskMessage borrowmsg = new BorrowTaskMessage(m_localWork);
+        m_localWork.setCoordinatorTask(true);
         m_localWork.m_sourceHSId = m_mbox.getHSId();
         // if we created a bogus fragment to distribute to serialize restart and borrow tasks,
         // don't include the empty dependencies we got back in the borrow fragment.
         if (!usedNullFragment) {
             borrowmsg.addInputDepMap(m_remoteDepTables);
         }
+        if (traceLog != null) {
+            final int batchIdx = m_localWork.getCurrentBatchIndex();
+            traceLog.add(() -> VoltTrace.beginAsync("sendborrow",
+                                                    MiscUtils.hsIdPairTxnIdToString(m_mbox.getHSId(), m_buddyHSId, txnId, batchIdx),
+                                                    "txnId", TxnEgo.txnIdToString(txnId),
+                                                    "dest", CoreUtils.hsIdToString(m_buddyHSId)));
+        }
         m_mbox.send(m_buddyHSId, borrowmsg);
 
         FragmentResponseMessage msg;
         while (true){
             msg = pollForResponses();
+            final FragmentResponseMessage finalMsg = msg;
+            if (traceLog != null) {
+                final int batchIdx = m_localWork.getCurrentBatchIndex();
+                traceLog.add(() -> VoltTrace.endAsync("sendborrow",
+                                                      MiscUtils.hsIdPairTxnIdToString(m_mbox.getHSId(), m_buddyHSId, txnId, batchIdx),
+                                                      "status", Byte.toString(finalMsg.getStatusCode())));
+            }
+
             assert(msg.getTableCount() > 0);
             // If this is a restarted TXN, verify that this is not a stale message from a different Dependency
             if (!m_isRestart || (msg.m_sourceHSId == m_buddyHSId &&

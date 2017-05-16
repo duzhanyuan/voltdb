@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -54,7 +54,15 @@
 
 namespace voltdb {
 
-AbstractJoinPlanNode::AbstractJoinPlanNode() { }
+AbstractJoinPlanNode::AbstractJoinPlanNode()
+    : m_preJoinPredicate()
+    , m_joinPredicate()
+    , m_wherePredicate()
+    , m_joinType(JOIN_TYPE_INVALID)
+    , m_outputSchemaPreAgg()
+    , m_tupleSchemaPreAgg(NULL)
+{
+}
 
 AbstractJoinPlanNode::~AbstractJoinPlanNode()
 {

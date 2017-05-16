@@ -1,5 +1,5 @@
 # This file is part of VoltDB.
-# Copyright (C) 2008-2016 VoltDB Inc.
+# Copyright (C) 2008-2017 VoltDB Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -334,7 +334,6 @@ class VerbRunner(object):
         parser = VoltCLIParser(self.verbspace)
         sys.stdout.write('\n')
         parser.print_help()
-        sys.stdout.write('\n')
 
     def get_usage(self):
         """
@@ -349,7 +348,6 @@ class VerbRunner(object):
         if self.verb:
             sys.stdout.write('\n')
             self._print_verb_help(self.verb.name)
-            sys.stdout.write('\n')
 
     def set_default_func(self, default_func):
         """
@@ -454,25 +452,34 @@ class VerbRunner(object):
             utility.abort('Resource file "%s" is missing.' % name)
         return None
 
-    def voltdb_connect(self, host, port, username=None, password=None):
+    def voltdb_connect(self, host, port, username=None, password=None, ssl_config=None, kerberos=None):
         """
         Create a VoltDB client connection.
         """
         self.voltdb_disconnect()
         try:
-            kwargs = {}
-            if username:
-                kwargs['username'] = username
-                if password:
-                    kwargs['password'] = password
-                else:
-                    """
-                    If a username was specified and a password was not, prompt the user for the pwd.
-                    """
-                    kwargs['password'] = getpass('Enter your password: ')
-            self.client = FastSerializer(host, port, **kwargs)
+            self.__voltdb_connect__(host, port, username, password, ssl_config, kerberos)
         except Exception, e:
             utility.abort(e)
+
+    def __voltdb_connect__(self, host, port, username=None, password=None, ssl_config=None, kerberos=None):
+        kwargs = {}
+        if username:
+            kwargs['username'] = username
+            if password:
+                kwargs['password'] = password
+            else:
+                """
+                If a username was specified and a password was not, prompt the user for the pwd.
+                """
+                kwargs['password'] = getpass('Enter your password: ')
+        if ssl_config:
+            kwargs['usessl'] = True
+            kwargs['ssl_config_file'] = ssl_config
+        if kerberos:
+            kwargs['kerberos'] = True
+
+        self.client = FastSerializer(host, port, **kwargs)
 
     def voltdb_disconnect(self):
         """
@@ -487,7 +494,6 @@ class VerbRunner(object):
         parser = VoltCLIParser(self.verbspace)
         parser.initialize_verb(verb_name)
         parser.print_help()
-        sys.stdout.write('\n')
 
     def _create_package(self, output_dir, name, version, description, force):
         # Internal method to create a runnable Python package.

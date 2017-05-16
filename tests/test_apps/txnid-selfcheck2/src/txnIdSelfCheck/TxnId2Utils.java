@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -23,13 +23,13 @@
 
 package txnIdSelfCheck;
 
-import java.io.IOException;
-
 import org.voltcore.logging.VoltLogger;
 import org.voltdb.client.Client;
 import org.voltdb.client.ClientResponse;
 import org.voltdb.client.NoConnectionsException;
 import org.voltdb.client.ProcCallException;
+
+import java.io.IOException;
 
 public enum TxnId2Utils {;
 
@@ -39,17 +39,50 @@ public enum TxnId2Utils {;
         return doProcCall(client, "@AdHoc", query);
     }
 
+    static boolean isConnectionTransactionOrCatalogIssue(String statusString) {
+        return statusString.matches("(?s).*AdHoc transaction -?[0-9]+ wasn.t planned against the current catalog version.*") ||
+                statusString.matches(".*Connection to database host \\(.*\\) was lost before a response was received.*") ||
+                statusString.matches(".*Transaction dropped due to change in mastership. It is possible the transaction was committed.*") ||
+                statusString.matches("(?s).*Transaction being restarted due to fault recovery or shutdown.*") ||
+                statusString.matches("(?s).*Invalid catalog update.  Catalog or deployment change was planned against one version of the cluster configuration but that version was no longer live.*") ||
+                statusString.matches("(?s).*Ad Hoc Planner task queue is full.*");
+    }
+
+    static boolean isServerUnavailableIssue(String statusString) {
+        return statusString.matches("(?s).*No response received in the allotted time.*") ||
+                statusString.matches(".*Server is currently unavailable; try again later.*") ||
+                statusString.matches(".*Server is paused.*") ||
+                statusString.matches("(?s).*Server is shutting down.*");
+    }
+
+    static boolean isConnectionTransactionCatalogOrServerUnavailableIssue(String statusString) {
+        return isConnectionTransactionOrCatalogIssue(statusString) ||
+                isServerUnavailableIssue(statusString);
+    }
+
+    static boolean isTransactionStateIndeterminate(ClientResponse cr) {
+        String statusString = cr.getStatusString();
+        return (statusString.matches("(?s).*No response received in the allotted time.*") ||
+                statusString.matches(".*Connection to database host \\(.*\\) was lost before a response was received.*"));
+    }
+
+
     static ClientResponse doProcCall(Client client, String proc, Object... parms) throws ProcCallException {
+        return doProcCall(client, proc, false, parms);
+    }
+    static ClientResponse doProcCallOneShot(Client client, String proc, Object... parms) throws ProcCallException {
+        return doProcCall(client, proc, true, parms);
+    }
+    static ClientResponse doProcCall(Client client, String proc, boolean oneshot, Object... parms) throws ProcCallException {
         Boolean sleep = false;
         Boolean noConnections = false;
-        Boolean timedOutOnce = false;
+        ClientResponse cr = null;
         while (true) {
             try {
-                ClientResponse cr = null;
                 if (proc == "@AdHoc")
                     cr = client.callProcedure("@AdHoc", (String) parms[0]);
                 else
-                    cr = client.callProcedure(proc);
+                    cr = client.callProcedure(proc, parms);
                 if (cr.getStatus() == ClientResponse.SUCCESS) {
                     Benchmark.txnCount.incrementAndGet();
                     return cr;
@@ -62,27 +95,20 @@ public enum TxnId2Utils {;
             } catch (IOException e) {
                 Benchmark.hardStop(e);
             } catch (ProcCallException e) {
-                ClientResponse cr = e.getClientResponse();
+                cr = e.getClientResponse();
                 String ss = cr.getStatusString();
                 log.debug(ss);
-                if (!timedOutOnce && ss.matches("(?s).*No response received in the allotted time.*"))
-                    /* allow a generic timeout but only once so that we don't risk masking error conditions */
-                    {timedOutOnce = true;}
-                else if (/*cr.getStatus() == ClientResponse.USER_ABORT &&*/
-                    (ss.matches("(?s).*AdHoc transaction [0-9]+ wasn.t planned against the current catalog version.*") ||
-                     ss.matches(".*Connection to database host \\(.*\\) was lost before a response was received.*") ||
-                     ss.matches(".*Transaction dropped due to change in mastership. It is possible the transaction was committed.*") ||
-                     ss.matches("(?s).*Transaction being restarted due to fault recovery or shutdown.*") ||
-                     ss.matches("(?s).*Invalid catalog update.  Catalog or deployment change was planned against one version of the cluster configuration but that version was no longer live.*")
-                    )) {}
-                else if (ss.matches(".*Server is currently unavailable; try again later.*") ||
-                         ss.matches(".*Server is paused and is currently unavailable.*")) {
+                if (isConnectionTransactionOrCatalogIssue(ss)
+                    ) { /* continue */ }
+                else if (isServerUnavailableIssue(ss)) {
                     sleep = true;
                 }
                 else {
                     throw e;
                 }
             }
+            if (oneshot)
+                return cr;
             if (sleep | noConnections) {
                 try { Thread.sleep(3000); } catch (Exception f) { }
                 sleep = false;

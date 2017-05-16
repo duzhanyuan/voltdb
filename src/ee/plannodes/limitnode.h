@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -60,8 +60,15 @@ class Table;
  */
 class LimitPlanNode : public AbstractPlanNode {
 public:
-    LimitPlanNode() : limit(-1), offset(0), limitParamIdx(-1), offsetParamIdx(-1)
-    {}
+    LimitPlanNode()
+        : limit(-1)
+        , offset(0)
+        , limitParamIdx(-1)
+        , offsetParamIdx(-1)
+        , limitExpression(NULL)
+    {
+    }
+
     ~LimitPlanNode();
     PlanNodeType getPlanNodeType() const;
 

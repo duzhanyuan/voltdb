@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -22,10 +22,13 @@ import java.util.List;
 import java.util.Map;
 
 import org.voltcore.logging.Level;
+import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.Mailbox;
 import org.voltcore.utils.CoreUtils;
+import org.voltdb.DependencyPair;
 import org.voltdb.ParameterSet;
 import org.voltdb.ProcedureRunner;
+import org.voltdb.SQLStmt;
 import org.voltdb.SiteProcedureConnection;
 import org.voltdb.VoltTable;
 import org.voltdb.VoltTable.ColumnInfo;
@@ -34,19 +37,34 @@ import org.voltdb.client.BatchTimeoutOverrideType;
 import org.voltdb.exceptions.EEException;
 import org.voltdb.exceptions.InterruptException;
 import org.voltdb.exceptions.SQLException;
+import org.voltdb.jni.ExecutionEngine;
+import org.voltdb.messaging.FastDeserializer;
 import org.voltdb.messaging.FragmentResponseMessage;
 import org.voltdb.messaging.FragmentTaskMessage;
 import org.voltdb.planner.ActivePlanRepository;
 import org.voltdb.rejoin.TaskLog;
 import org.voltdb.utils.Encoder;
 import org.voltdb.utils.LogKeys;
+import org.voltdb.utils.MiscUtils;
 import org.voltdb.utils.VoltTableUtil;
+import org.voltdb.utils.VoltTrace;
 
 public class FragmentTask extends TransactionTask
 {
+    /** java.util.logging logger. */
+    private static final VoltLogger LOG = new VoltLogger("HOST");
+
     final Mailbox m_initiator;
     final FragmentTaskMessage m_fragmentMsg;
     final Map<Integer, List<VoltTable>> m_inputDeps;
+    boolean m_respBufferable = true;
+    static final byte[] m_rawDummyResponse;
+
+    static {
+        VoltTable dummyResponse = new VoltTable(new ColumnInfo("STATUS", VoltType.TINYINT));
+        dummyResponse.setStatusCode(VoltTableUtil.NULL_DEPENDENCY_STATUS);
+        m_rawDummyResponse = dummyResponse.buildReusableDependenyResult();
+    }
 
     // This constructor is used during live rejoin log replay.
     FragmentTask(Mailbox mailbox,
@@ -71,6 +89,29 @@ public class FragmentTask extends TransactionTask
         m_initiator = mailbox;
         m_fragmentMsg = message;
         m_inputDeps = inputDeps;
+
+        if (txnState != null && !txnState.isReadOnly()) {
+            m_respBufferable = false;
+        }
+    }
+
+    public void setResponseNotBufferable() {
+        m_respBufferable = false;
+    }
+
+    private void deliverResponse(FragmentResponseMessage response) {
+        response.m_sourceHSId = m_initiator.getHSId();
+        response.setRespBufferable(m_respBufferable);
+        m_initiator.deliver(response);
+    }
+
+    @Override
+    protected void durabilityTraceEnd() {
+        final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.SPI);
+        if (traceLog != null) {
+            traceLog.add(() -> VoltTrace.endAsync("durability",
+                                                  MiscUtils.hsIdTxnIdToString(m_initiator.getHSId(), m_fragmentMsg.getSpHandle())));
+        }
     }
 
     @Override
@@ -79,6 +120,12 @@ public class FragmentTask extends TransactionTask
         waitOnDurabilityBackpressureFuture();
         if (hostLog.isDebugEnabled()) {
             hostLog.debug("STARTING: " + this);
+        }
+        final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.SPSITE);
+        if (traceLog != null) {
+            traceLog.add(() -> VoltTrace.beginDuration("runfragmenttask",
+                                                       "txnId", TxnEgo.txnIdToString(getTxnId()),
+                                                       "partition", Integer.toString(siteConnection.getCorrespondingPartitionId())));
         }
 
         // if this has a procedure name from the initiation bundled,
@@ -106,9 +153,7 @@ public class FragmentTask extends TransactionTask
 
             // execute the procedure
             final FragmentResponseMessage response = processFragmentTask(siteConnection);
-            // completion?
-            response.m_sourceHSId = m_initiator.getHSId();
-            m_initiator.deliver(response);
+            deliverResponse(response);
         } finally {
             if (BatchTimeoutOverrideType.isUserSetTimeout(individualTimeout)) {
                 siteConnection.setBatchTimeout(originalTimeout);
@@ -119,6 +164,9 @@ public class FragmentTask extends TransactionTask
 
         if (hostLog.isDebugEnabled()) {
             hostLog.debug("COMPLETE: " + this);
+        }
+        if (traceLog != null) {
+            traceLog.add(VoltTrace::endDuration);
         }
     }
 
@@ -141,20 +189,18 @@ public class FragmentTask extends TransactionTask
 
         final FragmentResponseMessage response =
             new FragmentResponseMessage(m_fragmentMsg, m_initiator.getHSId());
-        response.m_sourceHSId = m_initiator.getHSId();
         response.setRecovering(true);
         response.setStatus(FragmentResponseMessage.SUCCESS, null);
 
         // Set the dependencies even if this is a dummy response. This site could be the master
         // on elastic join, so the fragment response message is actually going to the MPI.
-        VoltTable depTable = new VoltTable(new ColumnInfo("STATUS", VoltType.TINYINT));
-        depTable.setStatusCode(VoltTableUtil.NULL_DEPENDENCY_STATUS);
         for (int frag = 0; frag < m_fragmentMsg.getFragmentCount(); frag++) {
             final int outputDepId = m_fragmentMsg.getOutputDepId(frag);
-            response.addDependency(outputDepId, depTable);
+            response.addDependency(new DependencyPair.BufferDependencyPair(outputDepId,
+                    m_rawDummyResponse, 0, m_rawDummyResponse.length));
         }
 
-        m_initiator.deliver(response);
+        deliverResponse(response);
         completeFragment();
     }
 
@@ -204,7 +250,7 @@ public class FragmentTask extends TransactionTask
 
         // IZZY: actually need the "executor" HSId these days?
         final FragmentResponseMessage currentFragResponse =
-            new FragmentResponseMessage(m_fragmentMsg, m_initiator.getHSId());
+                new FragmentResponseMessage(m_fragmentMsg, m_initiator.getHSId());
         currentFragResponse.setStatus(FragmentResponseMessage.SUCCESS, null);
 
         if (m_inputDeps != null) {
@@ -213,9 +259,20 @@ public class FragmentTask extends TransactionTask
 
         if (m_fragmentMsg.isEmptyForRestart()) {
             int outputDepId = m_fragmentMsg.getOutputDepId(0);
-            currentFragResponse.addDependency(outputDepId,
-                    new VoltTable(new ColumnInfo[] {new ColumnInfo("UNUSED", VoltType.INTEGER)}, 1));
+            currentFragResponse.addDependency(new DependencyPair.BufferDependencyPair(outputDepId,
+                    m_rawDummyResponse, 0, m_rawDummyResponse.length));
             return currentFragResponse;
+        }
+
+        ProcedureRunner currRunner = siteConnection.getProcedureRunner(m_fragmentMsg.getProcedureName());
+        long[] executionTimes = null;
+        int succeededFragmentsCount = 0;
+        if (currRunner != null) {
+            currRunner.getExecutionEngine().setPerFragmentTimingEnabled(m_fragmentMsg.isPerFragmentStatsRecording());
+            if (m_fragmentMsg.isPerFragmentStatsRecording()) {
+                // At this point, we will execute the fragments one by one.
+                executionTimes = new long[1];
+            }
         }
 
         for (int frag = 0; frag < m_fragmentMsg.getFragmentCount(); frag++)
@@ -240,8 +297,9 @@ public class FragmentTask extends TransactionTask
              * I am pretty sure what we don't support is partial rollback.
              * The entire procedure will roll back successfully on failure
              */
+            VoltTable dependency = null;
             try {
-                VoltTable dependency;
+                FastDeserializer fragResult;
                 fragmentPlan = m_fragmentMsg.getFragmentPlan(frag);
                 String stmtText = null;
 
@@ -262,30 +320,53 @@ public class FragmentTask extends TransactionTask
                 // set up the batch context for the fragment set
                 siteConnection.setBatch(m_fragmentMsg.getCurrentBatchIndex());
 
-                dependency = siteConnection.executePlanFragments(
+                SQLStmt stmt = new SQLStmt(stmtText);
+                fragResult = siteConnection.executePlanFragments(
                         1,
                         new long[] { fragmentId },
                         new long [] { inputDepId },
                         new ParameterSet[] { params },
-                        stmtText == null ? null : new String[] { stmtText },
+                        null,
+                        new SQLStmt[] { stmt },  // FragmentTasks don't generate statement hashes, this is just for long-running queries
                         m_txnState.txnId,
                         m_txnState.m_spHandle,
                         m_txnState.uniqueId,
-                        m_txnState.isReadOnly())[0];
+                        m_txnState.isReadOnly(),
+                        VoltTrace.log(VoltTrace.Category.EE) != null);
+
+                // get a copy of the result buffers from the cache buffer so we can post the
+                // fragment response to the network
+                final int tableSize;
+                final byte fullBacking[];
+                try {
+                    // read the complete size of the buffer used
+                    fragResult.readInt();
+                    // read number of dependencies (1)
+                    fragResult.readInt();
+                    // read the dependencyId() -1;
+                    fragResult.readInt();
+                    tableSize = fragResult.readInt();
+                    fullBacking = new byte[tableSize];
+                    // get a copy of the buffer
+                    fragResult.readFully(fullBacking);
+                } catch (final IOException ex) {
+                    LOG.error("Failed to deserialze result table" + ex);
+                    throw new EEException(ExecutionEngine.ERRORCODE_WRONG_SERIALIZED_BYTES);
+                }
 
                 if (hostLog.isTraceEnabled()) {
                     hostLog.l7dlog(Level.TRACE,
                        LogKeys.org_voltdb_ExecutionSite_SendingDependency.name(),
                        new Object[] { outputDepId }, null);
                 }
-                currentFragResponse.addDependency(outputDepId, dependency);
+                currentFragResponse.addDependency(new DependencyPair.BufferDependencyPair(outputDepId, fullBacking, 0, tableSize));
             } catch (final EEException e) {
                 hostLog.l7dlog( Level.TRACE, LogKeys.host_ExecutionSite_ExceptionExecutingPF.name(), new Object[] { Encoder.hexEncode(planHash) }, e);
                 currentFragResponse.setStatus(FragmentResponseMessage.UNEXPECTED_ERROR, e);
                 if (currentFragResponse.getTableCount() == 0) {
                     // Make sure the response has at least 1 result with a valid DependencyId
-                    currentFragResponse.addDependency(outputDepId,
-                            new VoltTable(new ColumnInfo[] {new ColumnInfo("UNUSED", VoltType.INTEGER)}, 1));
+                    currentFragResponse.addDependency(new DependencyPair.BufferDependencyPair(outputDepId,
+                            m_rawDummyResult, 0, m_rawDummyResult.length));
                 }
                 break;
             } catch (final SQLException e) {
@@ -293,8 +374,8 @@ public class FragmentTask extends TransactionTask
                 currentFragResponse.setStatus(FragmentResponseMessage.UNEXPECTED_ERROR, e);
                 if (currentFragResponse.getTableCount() == 0) {
                     // Make sure the response has at least 1 result with a valid DependencyId
-                    currentFragResponse.addDependency(outputDepId,
-                            new VoltTable(new ColumnInfo[] {new ColumnInfo("UNUSED", VoltType.INTEGER)}, 1));
+                    currentFragResponse.addDependency(new DependencyPair.BufferDependencyPair(outputDepId,
+                            m_rawDummyResult, 0, m_rawDummyResult.length));
                 }
                 break;
             }
@@ -303,8 +384,8 @@ public class FragmentTask extends TransactionTask
                 currentFragResponse.setStatus(FragmentResponseMessage.UNEXPECTED_ERROR, e);
                 if (currentFragResponse.getTableCount() == 0) {
                     // Make sure the response has at least 1 result with a valid DependencyId
-                    currentFragResponse.addDependency(outputDepId,
-                            new VoltTable(new ColumnInfo[] {new ColumnInfo("UNUSED", VoltType.INTEGER)}, 1));
+                    currentFragResponse.addDependency(new DependencyPair.BufferDependencyPair(outputDepId,
+                            m_rawDummyResult, 0, m_rawDummyResult.length));
                 }
                 break;
             }
@@ -312,6 +393,29 @@ public class FragmentTask extends TransactionTask
                 // ensure adhoc plans are unloaded
                 if (fragmentPlan != null) {
                     ActivePlanRepository.decrefPlanFragmentById(fragmentId);
+                }
+                // If the executed fragment comes from a stored procedure, we need to update the per-fragment stats for it.
+                // Notice that this code path is used to handle multi-partition stored procedures.
+                // The single-partition stored procedure handler is in the ProcedureRunner.
+                if (currRunner != null) {
+                    succeededFragmentsCount = currRunner.getExecutionEngine().extractPerFragmentStats(1, executionTimes);
+
+                    long stmtDuration = 0;
+                    int stmtResultSize = 0;
+                    int stmtParameterSetSize = 0;
+                    if (m_fragmentMsg.isPerFragmentStatsRecording()) {
+                        stmtDuration = executionTimes == null ? 0 : executionTimes[0];
+                        stmtResultSize = dependency == null ? 0 : dependency.getSerializedSize();
+                        stmtParameterSetSize = params == null ? 0 : params.getSerializedSize();
+                    }
+
+                    currRunner.getStatsCollector().endFragment(m_fragmentMsg.getStmtName(frag),
+                                                               m_fragmentMsg.isCoordinatorTask(),
+                                                               succeededFragmentsCount == 0,
+                                                               m_fragmentMsg.isPerFragmentStatsRecording(),
+                                                               stmtDuration,
+                                                               stmtResultSize,
+                                                               stmtParameterSetSize);
                 }
             }
         }

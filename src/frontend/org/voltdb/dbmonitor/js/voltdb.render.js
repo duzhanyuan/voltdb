@@ -3,7 +3,6 @@ function alertNodeClicked(obj) {
     var clickedServer = $(obj).html();
 
     if ($('#activeServerName').html() != clickedServer) {
-
         $('.activeServerName').html(clickedServer).attr('title', clickedServer);
 
         //Change the active server name in the node list
@@ -45,47 +44,19 @@ function alertNodeClicked(obj) {
     var iVoltDbRenderer = (function () {
         this.hostNames = [];
         this.currentHost = "";
+
         this.isHost = false;
-        this.nodeStatus = new Array();
-        this.isProcedureSearch = false;
-        this.isTableSearch = false;
-        this.isSearchTextCleaned = false;
-        this.isProcedureSortClicked = false;
-        this.isTableSortClicked = false;
-        this.isNextClicked = false;
         this.userPreferences = {};
-        this.procedureTableIndex = 0;
-        this.procedureDataSize = 0;
-        this.procedureSearchDataSize = 0;
-        this.tableIndex = 0;
-        this.tableDataSize = 0;
-        this.tableSearchDataSize = 0;
-        this.tupleCount = {};
-        this.searchData = {};
-        this.searchText = "";
-        this.serverIPs = {};
-        this.tupleMaxCount = {};
-        this.tupleMinCount = {};
-        this.maxVisibleRows = 5;
-        this.sortOrder = "";
-        this.sortTableOrder = "";
-        this.refreshTables = false;
         var totalServerCount = 0;
         var kFactor = 0;
         var procedureData = {};
-        var procedureJsonArray = [];
-        var procedureSearchJsonArray = [];
         var tableData = {};
-        var tableJsonArray = [];
-        var tableSearchJsonArray = [];
         var schemaCatalogTableTypes = {};
         var schemaCatalogColumnTypes = {};
         var systemOverview = {};
         var systemMemory = {};
         var htmlMarkups = { "SystemInformation": [] };
         var htmlMarkup;
-        var htmlTableMarkups = { "SystemInformation": [] };
-        var htmlTableMarkup = "";
         var minLatency = 0;
         var maxLatency = 0;
         var avgLatency = 0;
@@ -96,32 +67,16 @@ function alertNodeClicked(obj) {
         var avgLatencyIndex = 0;
         var perExecutionIndex = 0;
         var gCurrentServer = "";
-
         var tableNameIndex = 5;
         var partitionIndex = 4;
         var hostIndex = 1;
         var tupleCountIndex = 3;
-
-        //sorting related variables
-        this.isSortProcedures = false;
-        this.isSortTables = false;
-        this.sortColumn = "";
-        this.tableSortColumn = "";
-        this.isPageAction = false;
-
-        this.hint = "";
-
         var activeCount = 0;
         var activeCountCopied = 0;
         var joiningCount = 0;
         var missingCount = 0;
         var alertCount = 0;
         var serverSettings = false;
-
-        this.drTablesArray = [];
-
-        this.exportTablesArray = [];
-
         this.memoryDetails = [];
 
         this.ChangeServerConfiguration = function (serverName, portId, userName, pw, isHashPw, isAdmin) {
@@ -164,7 +119,6 @@ function alertNodeClicked(obj) {
         };
 
         this.HandleLogin = function (serverName, portId, pageLoadCallback) {
-
             var responseObtained = false;
             $("#username").data("servername", serverName);
             $("#username").data("portid", portId);
@@ -173,7 +127,6 @@ function alertNodeClicked(obj) {
                 open: function (event, ui, ele) {
                 },
                 login: function (popupCallback) {
-
                     $("#overlay").show();
                     $("#UnableToLoginMsg").hide();
                     var usernameVal = $("#username").val();
@@ -181,19 +134,16 @@ function alertNodeClicked(obj) {
                     responseObtained = false;
 
                     testConnection($("#username").data("servername"), $("#username").data("portid"), usernameVal, passwordVal, true, function (result, response) {
-
                         if (responseObtained || (response != undefined && response.hasOwnProperty("status") && response.status == -1))
                             return;
                         responseObtained = true;
 
                         $("#overlay").hide();
                         if (result) {
-
                             //Save user details to cookie.
                             saveSessionCookie("username", usernameVal);
                             saveSessionCookie("password", passwordVal);
                             voltDbRenderer.ShowUsername(usernameVal);
-
                             pageLoadCallback();
                             popupCallback();
                             $("#loginBoxDialogue").hide();
@@ -204,7 +154,6 @@ function alertNodeClicked(obj) {
                             $("#logOut").css('display', 'block');
                             $('#logOut').prop('title', VoltDbUI.getCookie("username"));
                         } else {
-
                             //Error: Server is not available(-100) or Connection refused(-5) but is not "Authentication rejected(-3)"
                             if (response != undefined && response.status != -3) {
                                 popupCallback();
@@ -223,8 +172,7 @@ function alertNodeClicked(obj) {
 
             $('#username').keypress(function (e) {
                 var key = e.which;
-                if (key == 13)  // the enter key code
-                {
+                if (key == 13) { // the enter key code
                     $("#LoginBtn").trigger("click");
                     return false;
                 }
@@ -232,8 +180,7 @@ function alertNodeClicked(obj) {
             });
             $('#password').keypress(function (e) {
                 var key = e.which;
-                if (key == 13)  // the enter key code
-                {
+                if (key == 13) { // the enter key code
                     $("#LoginBtn").trigger("click");
                     return false;
                 }
@@ -258,7 +205,6 @@ function alertNodeClicked(obj) {
                 responseObtained = false;
                 serverName = VoltDBConfig.GetDefaultServerIP(true);
                 testConnection(serverName, portId, username, password, true, function (result, response) {
-
                     if (responseObtained || (response != undefined && response.hasOwnProperty("status") && response.status == -1))
                         return;
                     responseObtained = true;
@@ -266,9 +212,7 @@ function alertNodeClicked(obj) {
                     $("#overlay").hide();
 
                     if (!result) {
-
                         if (response != undefined && response.hasOwnProperty("status")) {
-
                             //Error: Hashedpassword must be a 40-byte hex-encoded SHA-1 hash.
                             if (response.status == -3 && response.hasOwnProperty("statusstring") && response.statusstring.indexOf("Hashedpassword must be a 40-byte") > -1) {
                                 //Try to auto login after clearing username and password
@@ -276,8 +220,7 @@ function alertNodeClicked(obj) {
                                 saveSessionCookie("password", null);
                                 tryAutoLogin();
                                 return;
-                            }
-                            else if (response.status == 401){
+                            } else if (response.status == 401){
                                 $("#unAuthorized").trigger("click");
                                 return;
                             }
@@ -291,15 +234,12 @@ function alertNodeClicked(obj) {
                         //If security is enabled, then display popup to get username and password.
                         saveSessionCookie("username", null);
                         saveSessionCookie("password", null);
-
                         $("#loginLink").trigger("click");
                     } else {
                         pageLoadCallback();
                     }
-
                 });
             };
-
             tryAutoLogin();
         };
 
@@ -314,11 +254,9 @@ function alertNodeClicked(obj) {
         };
 
         this.GetSystemInformation = function (onInformationLoaded, onAdminPagePortAndOverviewDetailsLoaded, onAdminPageServerListLoaded) {
-
             VoltDBService.GetSystemInformation(function (connection) {
                 populateSystemInformation(connection);
                 getMemoryDetails(connection, systemMemory);
-
 
                 if (VoltDbAdminConfig.isAdmin) {
                     onAdminPagePortAndOverviewDetailsLoaded(getPortAndOverviewDetails(), serverSettings);
@@ -330,7 +268,6 @@ function alertNodeClicked(obj) {
 
                 onInformationLoaded();
             });
-
         };
 
         this.GetClusterInformation = function (onInformationLoaded) {
@@ -346,7 +283,6 @@ function alertNodeClicked(obj) {
         };
 
         this.CheckAdminPriviledges = function (onInformationLoaded) {
-
             VoltDBService.GetShortApiProfile(function (connection) {
                 onInformationLoaded(hasAdminPrivileges(connection));
             });
@@ -363,9 +299,25 @@ function alertNodeClicked(obj) {
             }
         };
 
+        this.GetCommandLogStatus = function(onInformationLoaded){
+            if (VoltDbAdminConfig.isAdmin || checkSecurity) {
+                VoltDBService.GetShortApiDeployment(function (connection) {
+                    var rawData;
+                    var isCmdLogEnabled = false;
+                    if (connection != null){
+                        rawData = connection.Metadata['SHORTAPI_DEPLOYMENT'];
+                        if(rawData.hasOwnProperty('commandlog') && rawData['commandlog'].hasOwnProperty('enabled')){
+                            isCmdLogEnabled = rawData['commandlog']['enabled'];
+                        }
+                    }
+                    onInformationLoaded(isCmdLogEnabled);
+                });
+            } else {
+                onInformationLoaded(false);
+            }
+        }
 
         this.GetExportProperties = function (onInformationLoaded) {
-
             VoltDBService.GetExportProperties(function (connection) {
                 var rawData;
                 if (connection != null)
@@ -385,7 +337,6 @@ function alertNodeClicked(obj) {
                     procedureMetadata = procedureData;
                     onProceduresDataLoaded(procedureMetadata);
                 });
-
             });
 
             var setKFactor = function (connection) {
@@ -393,10 +344,8 @@ function alertNodeClicked(obj) {
                     if (entry[0] == 'kfactor')
                         kFactor = entry[1];
                 });
-
             };
-
-        };
+        }
 
         this.getTablesInformation = function (onTableDataLoaded) {
             VoltDBService.GetDataTablesInformation(function (inestConnection) {
@@ -404,7 +353,6 @@ function alertNodeClicked(obj) {
                 populateTablesInformation(inestConnection);
                 onTableDataLoaded(inestConnection.Metadata['@Statistics_TABLE'].data);
             });
-
         };
 
         this.GetDataTablesInformation = function (contextConnectionReturned) {
@@ -437,7 +385,6 @@ function alertNodeClicked(obj) {
                 getPartitionIdleTimeDetails(connection, partitionDetails);
                 onInformationLoaded(partitionDetails);
             });
-
         };
 
         this.getCpuGraphInformation = function (onInformationLoaded) {
@@ -447,7 +394,14 @@ function alertNodeClicked(obj) {
                 getCpuDetails(connection, cpuDetails);
                 onInformationLoaded(cpuDetails);
             });
+        };
 
+        this.getImporterGraphInformation = function (onInformationLoaded) {
+            var importerDetails = {};
+            VoltDBService.GetImporterInformation(function (connection) {
+                getImporterDetails(connection, importerDetails);
+                onInformationLoaded(importerDetails);
+            });
         };
 
         //Check if DR is enable or not
@@ -482,6 +436,16 @@ function alertNodeClicked(obj) {
         };
         //
 
+        //pm
+        this.GetDrRoleInformation = function (onInformationLoaded) {
+            var drRoleInfo = {};
+            VoltDBService.GetDrRoleInformation(function (connection) {
+                getDrRoleDetails(connection, drRoleInfo);
+                onInformationLoaded(drRoleInfo);
+            });
+        };
+
+
         //Render DR Replication Graph
         this.GetDrReplicationInformation = function (onInformationLoaded) {
             var replicationData = {};
@@ -504,22 +468,20 @@ function alertNodeClicked(obj) {
         };
         //
 
+        this.GetLiveClientsInfo = function (onInformationLoaded) {
+            var clientsInfo = {};
+            VoltDBService.GetLiveClientsInfo(function (connection) {
+                getLiveClientData(connection, clientsInfo);
+                onInformationLoaded(clientsInfo);
+            });
+        };
+
         //Get Cluster Id 
         this.GetDrInformations = function (onInformationLoaded) {
             var replicationData = {};
             VoltDBService.GetDrReplicationInformation(function (connection) {
                 getDrInformations(connection, replicationData);
                 onInformationLoaded(replicationData);
-            });
-        };
-        //
-        //Render Cluster Transaction Graph
-        this.GetTransactionInformation = function (onInformationLoaded) {
-            var transactionDetails = {};
-
-            VoltDBService.GetTransactionInformation(function (connection) {
-                getTransactionDetails(connection, transactionDetails);
-                onInformationLoaded(transactionDetails);
             });
         };
         //
@@ -600,13 +562,9 @@ function alertNodeClicked(obj) {
                 jQuery.each(systemOverview, function (id, val) {
                     if (val["CLUSTERSTATE"] == "RUNNING" || val["CLUSTERSTATE"] == "PAUSED")
                         activeCount++;
-
-                    //else if (val["CLUSTERSTATE"] == "JOINING")
-                    //    joiningCount++;
                 });
 
                 totalServerCount = hostCount
-
                 missingCount = totalServerCount - (activeCount + joiningCount);
 
                 if (missingCount < 0)
@@ -631,15 +589,14 @@ function alertNodeClicked(obj) {
                             '<td width="30%"><span class="alert">' + systemMemory[hostName]["MEMORYUSAGE"] + '%</span></td></tr>';
                         alertCount++;
                     }
-
                 });
+
                 if (alertCount > 0) {
                     html += '<li class="alertIcon"><a href="#memoryAlerts" id="showMemoryAlerts">Alert <span>(' + alertCount + ')</span></a></li>';
                 }
 
                 callback(html, alertHtml);
             })
-
         };
 
         var getHostCount = function(deploymentInfo){
@@ -659,7 +616,6 @@ function alertNodeClicked(obj) {
                     gCurrentServer = val["HOSTNAME"];
                     saveInLocalStorage("currentServer", val["HOSTNAME"]);
                     return false;
-
                 }
                 return true;
             });
@@ -674,7 +630,6 @@ function alertNodeClicked(obj) {
                     return true;
                 });
             }
-
         };
 
         var hasAdminPrivileges = function (connection) {
@@ -692,7 +647,6 @@ function alertNodeClicked(obj) {
                     });
                 }
             }
-
             return isAdmin;
         };
 
@@ -709,7 +663,6 @@ function alertNodeClicked(obj) {
 
                 adminConfigValues['sitesperhost'] = data.cluster.sitesperhost;
                 adminConfigValues['kSafety'] = data.cluster.kfactor;
-
                 adminConfigValues['partitionDetection'] = data.partitionDetection != null ? data.partitionDetection.enabled : false;
                 adminConfigValues['securityEnabled'] = data.security != null ? data.security.enabled : false;
 
@@ -743,10 +696,10 @@ function alertNodeClicked(obj) {
                 }
 
                 //Export
-                if (data.export != null) {
-                    adminConfigValues['export'] = data.export.enabled;
-                    adminConfigValues['targets'] = data.export.target;
-                    adminConfigValues['configuration'] = data.export.configuration;
+                if (data["export"] != null) {
+                    adminConfigValues['export'] = data["export"].enabled;
+                    adminConfigValues['targets'] = data["export"].target;
+                    adminConfigValues['configuration'] = data["export"].configuration;
                 }
 
                 //Advanced 
@@ -808,12 +761,26 @@ function alertNodeClicked(obj) {
                 }
 
                 //import
-
-                if (data.import != null) {
-                    adminConfigValues['importConfiguration'] = data.import.configuration;
+                if (data["import"] != null) {
+                    adminConfigValues['importConfiguration'] = data["import"].configuration;
                 }
-            }
+                //snmp
 
+                if(data['snmp'] != null){
+                    adminConfigValues['target'] = data['snmp'].target;
+                    adminConfigValues['community'] = data['snmp'].community;
+                    adminConfigValues['username'] = data['snmp'].username;
+                    adminConfigValues['enabled'] = data['snmp'].enabled;
+                    adminConfigValues['authprotocol'] = data['snmp'].authprotocol;
+                    adminConfigValues['authkey'] = data['snmp'].authkey;
+                    adminConfigValues['privacyprotocol'] = data['snmp'].privacyprotocol;
+                    adminConfigValues['privacykey'] = data['snmp'].privacykey;
+
+
+                }
+
+
+            }
             return adminConfigValues;
         };
 
@@ -823,10 +790,8 @@ function alertNodeClicked(obj) {
                 var data = connection.Metadata['SHORTAPI_DEPLOYMENT_EXPORTTYPES'];
                 exportProperties['type'] = data.types;
             }
-
             return exportProperties;
         };
-
 
         var populateSystemInformation = function (connection) {
             var updatedSystemOverview = [];
@@ -854,7 +819,6 @@ function alertNodeClicked(obj) {
                 if (singleData[1] == 'IPADDRESS') {
                     if (singleData[2] == VoltDBConfig.GetDefaultServerIP()) {
                         voltDbRenderer.isHost = true;
-
                     } else {
                         voltDbRenderer.isHost = false;
                         serverOverview[id] = {};
@@ -865,7 +829,6 @@ function alertNodeClicked(obj) {
                 if (singleData[1] == 'HOSTNAME') {
                     if (voltDbRenderer.isHost) {
                         voltDbRenderer.currentHost = singleData[2];
-
                     }
                     if ($.inArray(singleData[2], voltDbRenderer.hostNames) == -1)
                         voltDbRenderer.hostNames.push(singleData[2]);
@@ -880,8 +843,7 @@ function alertNodeClicked(obj) {
                     if (singleData[1] == "LOG4JPORT") {
                         currentServerOverview["NODEID"] = id;
                     }
-                }
-                else {
+                } else {
                     serverOverview[id][singleData[1]] = singleData[2];
 
                     if (singleData[1] == "LOG4JPORT") {
@@ -909,55 +871,23 @@ function alertNodeClicked(obj) {
 
         var populateTablesInformation = function (connection) {
             var counter = 0;
-            voltDbRenderer.refreshTables = true;
             connection.Metadata['@Statistics_TABLE'].schema.forEach(function (columnInfo) {
-
                 if (columnInfo["name"] == "HOST_ID")
                     hostIndex = counter;
 
                 if (columnInfo["name"] == "TABLE_NAME")
                     tableNameIndex = counter;
-
                 else if (columnInfo["name"] == "PARTITION_ID")
                     partitionIndex = counter;
-
                 else if (columnInfo["name"] == "TUPLE_COUNT")
                     tupleCountIndex = counter;
 
                 counter++;
-
             });
 
             counter = 0;
 
-            if (voltDbRenderer.isSortTables && !voltDbRenderer.isTableSearch) { //is sorting is enabled create json array first to contain sort data on it,
-                //then after sorting add it to a parent json object procedureData
-                populateTableJsonArray(connection);
-                if (voltDbRenderer.sortTableOrder == "ascending") {
-                    tableJsonArray = ascendingSortJSON(tableJsonArray, voltDbRenderer.tableSortColumn);
-
-                } else if (voltDbRenderer.sortTableOrder == "descending") {
-                    tableJsonArray = descendingSortJSON(tableJsonArray, voltDbRenderer.tableSortColumn);
-
-                }
-                mapJsonArrayToTables();
-
-            } else if (voltDbRenderer.isSortTables && voltDbRenderer.isTableSearch) {
-                voltDbRenderer.formatSearchTablesDataToJsonArray(connection, voltDbRenderer.searchText);
-                if (voltDbRenderer.sortTableOrder == "ascending") {
-                    tableSearchJsonArray = ascendingSortJSON(tableSearchJsonArray, voltDbRenderer.tableSortColumn);
-
-                } else if (voltDbRenderer.sortTableOrder == "descending") {
-                    tableSearchJsonArray = descendingSortJSON(tableSearchJsonArray, voltDbRenderer.tableSortColumn);
-
-                }
-                mapJsonArrayToSearchedTables();
-
-            } else {
-                formatTableData(connection);
-
-            }
-            voltDbRenderer.refreshTables = false;
+            formatTableData(connection);
         };
 
         var populateProceduresInformation = function (connection) {
@@ -979,39 +909,9 @@ function alertNodeClicked(obj) {
                         perExecutionIndex = counter;
 
                     counter++;
-
                 });
 
-                if (voltDbRenderer.isSortProcedures && !voltDbRenderer.isProcedureSearch) { //is sorting is enabled create json array first to contain sort data on it,
-                    //then after sorting add it to a parent json object procedureData
-                    populateProcedureJsonArray(connection);
-                    if (voltDbRenderer.sortOrder == "ascending") {
-                        procedureJsonArray = ascendingSortJSON(procedureJsonArray, voltDbRenderer.sortColumn);
-
-                    } else if (voltDbRenderer.sortOrder == "descending") {
-                        procedureJsonArray = descendingSortJSON(procedureJsonArray, voltDbRenderer.sortColumn);
-
-                    }
-                    mapJsonArrayToProcedures();
-
-                } else if (voltDbRenderer.isSortProcedures && voltDbRenderer.isProcedureSearch) {
-                    voltDbRenderer.formatSearchDataToJsonArray(false);
-                    if (voltDbRenderer.sortOrder == "ascending") {
-                        procedureSearchJsonArray = ascendingSortJSON(procedureSearchJsonArray, voltDbRenderer.sortColumn);
-
-                    } else if (voltDbRenderer.sortOrder == "descending") {
-                        procedureSearchJsonArray = descendingSortJSON(procedureSearchJsonArray, voltDbRenderer.sortColumn);
-
-                    }
-                    mapJsonArrayToSearchedProcedures();
-
-                } else {
-                    populateProcedureData(connection);
-
-                }
-
-                voltDbRenderer.procedureDataSize = connection.Metadata['@Statistics_PROCEDUREPROFILE'].data.length;
-
+                populateProcedureData(connection);
             }
         };
 
@@ -1019,197 +919,30 @@ function alertNodeClicked(obj) {
             var procedureCount = 0;
             var procedure = {};
             procedureData = [];
+            connection.Metadata['@Statistics_PROCEDUREPROFILE'].data.forEach(function (entry) {
+                var name = entry[procedureNameIndex];
+                minLatency = entry[minLatencyIndex] * Math.pow(10, -6);
+                maxLatency = entry[maxLatencyIndex] * Math.pow(10, -6);
+                avgLatency = entry[avgLatencyIndex] * Math.pow(10, -6);
 
-            if (connection.Metadata['@Statistics_PROCEDUREPROFILE'].data != "" &&
-                connection.Metadata['@Statistics_PROCEDUREPROFILE'].data != [] &&
-                connection.Metadata['@Statistics_PROCEDUREPROFILE'].data != undefined) {
-                connection.Metadata['@Statistics_PROCEDUREPROFILE'].data.forEach(function (entry) {
-                    var name = entry[procedureNameIndex];
-                    minLatency = entry[minLatencyIndex] * Math.pow(10, -6);
-                    maxLatency = entry[maxLatencyIndex] * Math.pow(10, -6);
-                    avgLatency = entry[avgLatencyIndex] * Math.pow(10, -6);
+                minLatency = parseFloat(minLatency.toFixed(2));
+                maxLatency = parseFloat(maxLatency.toFixed(2));
+                avgLatency = parseFloat(avgLatency.toFixed(2));
 
-                    minLatency = parseFloat(minLatency.toFixed(2));
-                    maxLatency = parseFloat(maxLatency.toFixed(2));
-                    avgLatency = parseFloat(avgLatency.toFixed(2));
+                if (!procedureData.hasOwnProperty(name)) {
+                    procedure = {
+                        'PROCEDURE': entry[procedureNameIndex],
+                        'INVOCATIONS': entry[invocationsIndex],
+                        'MIN_LATENCY': minLatency,
+                        'MAX_LATENCY': maxLatency,
+                        'AVG_LATENCY': avgLatency,
+                        'PERC_EXECUTION': entry[perExecutionIndex]
+                    };
+                    procedureData.push(procedure);
 
-                    if (!procedureData.hasOwnProperty(name)) {
-                        procedure = {
-                            'PROCEDURE': entry[procedureNameIndex],
-                            'INVOCATIONS': entry[invocationsIndex],
-                            'MIN_LATENCY': minLatency,
-                            'MAX_LATENCY': maxLatency,
-                            'AVG_LATENCY': avgLatency,
-                            'PERC_EXECUTION': entry[perExecutionIndex]
-                        };
-                        procedureData.push(procedure);
-
-                        procedureCount++;
-                    }
-
-                });
-            } else {
-                formatTableNoData("PROCEDURE");
-
-            }
-        };
-
-        var populateProcedureJsonArrayForSorting = function (connection) {
-            var procedureCount = 0;
-            if (connection != null) {
-
-                var isPopulateSortData = checkSortColumnSortable();
-                if (connection.Metadata['@Statistics_PROCEDUREPROFILE'] != null) {
-                    connection.Metadata['@Statistics_PROCEDUREPROFILE'].data.forEach(function (entry) {
-                        var name = entry[procedureNameIndex];
-                        minLatency = entry[minLatencyIndex] * Math.pow(10, -6);
-                        maxLatency = entry[maxLatencyIndex] * Math.pow(10, -6);
-                        avgLatency = entry[avgLatencyIndex] * Math.pow(10, -6);
-
-                        minLatency = parseFloat(minLatency.toFixed(2));
-                        maxLatency = parseFloat(maxLatency.toFixed(2));
-                        avgLatency = parseFloat(avgLatency.toFixed(2));
-
-                        if (!procedureData.hasOwnProperty(name)) {
-                            procedureData[name] = {};
-                        } else {
-                            procedureData[name]['PROCEDURE'] = entry[procedureNameIndex];
-                            procedureData[name]['INVOCATIONS'] = entry[invocationsIndex];
-                            procedureData[name]['MIN_LATENCY'] = minLatency;
-                            procedureData[name]['MAX_LATENCY'] = maxLatency;
-                            procedureData[name]['AVG_LATENCY'] = avgLatency;
-                            procedureData[name]['PERC_EXECUTION'] = entry[perExecutionIndex];
-                            procedureCount++;
-
-                        }
-
-                    });
+                    procedureCount++;
                 }
-
-                procedureJsonArray = [];
-                procedureCount = 0;
-                if (voltDbRenderer.searchText == "" || voltDbRenderer.searchText == undefined || isPopulateSortData) {
-                    jQuery.each(procedureData, function (key, data) {
-                        if (!checkIfDuplicateJson(procedureJsonArray, key)) {
-                            procedureJsonArray[procedureCount] = {
-                                "PROCEDURE": data.PROCEDURE,
-                                "INVOCATIONS": data.INVOCATIONS,
-                                "MIN_LATENCY": data.MIN_LATENCY,
-                                "MAX_LATENCY": data.MAX_LATENCY,
-                                "AVG_LATENCY": data.AVG_LATENCY,
-                                "PERC_EXECUTION": data.PERC_EXECUTION
-                            };
-                            procedureCount++;
-                        }
-                    });
-
-                }
-
-            }
-
-        };
-
-        var populateProcedureJsonArray = function (connection) {
-            var procedureCount = 0;
-            if (connection != undefined) {
-                if (connection.Metadata['@Statistics_PROCEDUREPROFILE'].data != undefined) {
-                    //apply search only if column is "PROCEDURE"
-                    var isPopulateSortData = checkSortColumnSortable();
-                    procedureJsonArray = [];
-
-                    connection.Metadata['@Statistics_PROCEDUREPROFILE'].data.forEach(function (entry) {
-                        if (voltDbRenderer.searchText == "" || voltDbRenderer.searchText == undefined) {
-                            var name = entry[procedureNameIndex];
-                            minLatency = entry[minLatencyIndex] * Math.pow(10, -6);
-                            maxLatency = entry[maxLatencyIndex] * Math.pow(10, -6);
-                            avgLatency = entry[avgLatencyIndex] * Math.pow(10, -6);
-
-                            minLatency = parseFloat(minLatency.toFixed(2));
-                            maxLatency = parseFloat(maxLatency.toFixed(2));
-                            avgLatency = parseFloat(avgLatency.toFixed(2));
-
-                            if (!checkIfDuplicateJson(procedureJsonArray, entry[procedureNameIndex])) {
-                                procedureJsonArray[procedureCount] = {
-                                    "PROCEDURE": entry[procedureNameIndex],
-                                    "INVOCATIONS": entry[invocationsIndex],
-                                    "MIN_LATENCY": minLatency,
-                                    "MAX_LATENCY": maxLatency,
-                                    "AVG_LATENCY": avgLatency,
-                                    "PERC_EXECUTION": entry[perExecutionIndex]
-                                };
-                                procedureCount++;
-                            }
-                        } else {
-                            if (isPopulateSortData) {
-                                var name = entry[procedureNameIndex];
-                                minLatency = entry[minLatencyIndex] * Math.pow(10, -6);
-                                maxLatency = entry[maxLatencyIndex] * Math.pow(10, -6);
-                                avgLatency = entry[avgLatencyIndex] * Math.pow(10, -6);
-
-                                minLatency = parseFloat(minLatency.toFixed(2));
-                                maxLatency = parseFloat(maxLatency.toFixed(2));
-                                avgLatency = parseFloat(avgLatency.toFixed(2));
-
-                                if (!checkIfDuplicateJson(procedureJsonArray, entry[procedureNameIndex])) {
-                                    procedureJsonArray[procedureCount] = {
-                                        "PROCEDURE": entry[procedureNameIndex],
-                                        "INVOCATIONS": entry[invocationsIndex],
-                                        "MIN_LATENCY": minLatency,
-                                        "MAX_LATENCY": maxLatency,
-                                        "AVG_LATENCY": avgLatency,
-                                        "PERC_EXECUTION": entry[perExecutionIndex]
-                                    };
-                                    procedureCount++;
-                                }
-                            }
-                        }
-
-                    });
-
-                }
-            }
-        };
-
-        var populateTableJsonArray = function (connection) {
-            var tableCount = 0;
-            formatTableData(connection);
-            if (tableData != undefined || tableData != "") {
-
-                //apply search only if column is "TABLENAME"                
-                if (!voltDbRenderer.isTableSearch) {
-
-                    tableJsonArray = [];
-
-                    $.each(tableData, function (key, data) {
-                        tableJsonArray[tableCount] = {
-                            "TABLE_NAME": key,
-                            "MAX_ROWS": data["MAX_ROWS"],
-                            "MIN_ROWS": data["MIN_ROWS"],
-                            "AVG_ROWS": data["AVG_ROWS"],
-                            "TUPLE_COUNT": data["TUPLE_COUNT"],
-                            "TABLE_TYPE": schemaCatalogTableTypes[key].REMARKS //getColumnTypes(key) == "PARTITION_COLUMN" ? "PARTITIONED" : schemaCatalogTableTypes[key].TABLE_TYPE
-                        };
-                        tableCount++;
-                    });
-                }
-                else {
-
-                    tableSearchJsonArray = [];
-
-                    $.each(lSearchData.tables, function (key, data) {
-                        tableSearchJsonArray[tableCount] = {
-                            "TABLE_NAME": key,
-                            "MAX_ROWS": data["MAX_ROWS"],
-                            "MIN_ROWS": data["MIN_ROWS"],
-                            "AVG_ROWS": data["AVG_ROWS"],
-                            "TUPLE_COUNT": data["TUPLE_COUNT"],
-                            "TABLE_TYPE": schemaCatalogTableTypes[key].REMARKS //getColumnTypes(key) == "PARTITION_COLUMN" ? "PARTITIONED" : schemaCatalogTableTypes[key].TABLE_TYPE
-                        };
-                        tableCount++;
-                    });
-                }
-
-            }
+            });
         };
 
         var populateTableTypes = function (connection) {
@@ -1285,8 +1018,7 @@ function alertNodeClicked(obj) {
                                 '<td width="30%"><span class="servIpNum">' + hostIP + '</span></td>' +
                                 '<td width="30%"><span class="memory-status">' + systemMemory[hostName]["MEMORYUSAGE"] + '%</span></td></tr>';
                         }
-                    }
-                    else if (hostName != null && currentServer != hostName && val["CLUSTERSTATE"] == "RUNNING") {
+                    } else if (hostName != null && currentServer != hostName && val["CLUSTERSTATE"] == "RUNNING") {
                         if (systemMemory[hostName]["MEMORYUSAGE"] >= memoryThreshold) {
                             htmlMarkup = '<tr class="filterClass"><td class="active" width="40%"><a class="alertIconServ serverNameAlign" data-ip="' + systemMemory[hostName]["HOST_ID"] + '" href="javascript:void(0);">' + hostName + '</a></td>' +
                                 '<td width="30%"><span class="servIpNum">' + hostIP + '</span></td>' +
@@ -1298,8 +1030,7 @@ function alertNodeClicked(obj) {
                                 '<td width="30%"><span class="memory-status">' + systemMemory[hostName]["MEMORYUSAGE"] + '%</span></td></tr>';
                         }
 
-                    }
-                    else if (hostName != null && currentServer == hostName && val["CLUSTERSTATE"] == "PAUSED") {
+                    } else if (hostName != null && currentServer == hostName && val["CLUSTERSTATE"] == "PAUSED") {
                         if (systemMemory[hostName]["MEMORYUSAGE"] >= memoryThreshold) {
                             htmlMarkup = '<tr class="filterClass serverActive"><td class="pauseActiveMonitoring" width="40%"><a class="alertIconServ serverNameAlign" data-ip="' + systemMemory[hostName]["HOST_ID"] + '" href="javascript:void(0);">' + hostName + '</a></td>' +
                                 '<td width="30%"><span class="servIpNum">' + hostIP + '</span></td>' +
@@ -1311,8 +1042,7 @@ function alertNodeClicked(obj) {
                                 '<td width="30%"><span class="memory-status">' + systemMemory[hostName]["MEMORYUSAGE"] + '%</span></td></tr>';
                         }
 
-                    }
-                    else if (hostName != null && currentServer != hostName && val["CLUSTERSTATE"] == "PAUSED") {
+                    } else if (hostName != null && currentServer != hostName && val["CLUSTERSTATE"] == "PAUSED") {
                         if (systemMemory[hostName]["MEMORYUSAGE"] >= memoryThreshold) {
                             htmlMarkup = '<tr class="filterClass"><td class="pauseMonitoring" width="40%"><a class="alertIconServ serverNameAlign" data-ip="' + systemMemory[hostName]["HOST_ID"] + '" href="javascript:void(0);">' + hostName + '</a></td>' +
                                 '<td  width="30%"><span class="servIpNum">' + hostIP + '</span></td>' +
@@ -1324,8 +1054,7 @@ function alertNodeClicked(obj) {
                                 '<td width="30%"><span class="memory-status">' + systemMemory[hostName]["MEMORYUSAGE"] + '%</span></td></tr>';
                         }
 
-                    }
-                    else if (hostName != null && val["CLUSTERSTATE"] == "JOINING") {
+                    } else if (hostName != null && val["CLUSTERSTATE"] == "JOINING") {
                         if (systemMemory[hostName]["MEMORYUSAGE"] >= memoryThreshold) {
                             htmlMarkup = htmlMarkup + '<tr class="filterClass"><td class="joining" width="40%"><a class="alertIconServ serverNameAlign" data-ip="' + systemMemory[hostName]["HOST_ID"] + '" href="javascript:void(0);">' + hostName + '</a></td>' +
                                 '<td width="30%"><span class="servIpNum">' + hostIP + '</span></td>' +
@@ -1355,6 +1084,7 @@ function alertNodeClicked(obj) {
                                '<td width="30%"><span data-ip="' + systemMemory[hostName]["HOST_ID"] + '" class="memory-status">' + systemMemory[hostName]["MEMORYUSAGE"] + '%</span></td></tr>';
                         }
                     }
+
                     if (hostName != null && currentServerHtml != hostName && val["CLUSTERSTATE"] == "RUNNING") {
                         if (systemMemory[hostName]["MEMORYUSAGE"] >= memoryThreshold) {
                             htmlMarkup = htmlMarkup + '<tr class="filterClass"><td class="active"  width="40%"><a class="alertIconServ serverNameAlign" data-ip="' + systemMemory[hostName]["HOST_ID"] + '" href="javascript:void(0);">' + hostName + '</a></td>' +
@@ -1367,6 +1097,7 @@ function alertNodeClicked(obj) {
                         }
 
                     }
+
                     if (hostName != null && currentServerHtml == hostName && val["CLUSTERSTATE"] == "PAUSED") {
                         if (systemMemory[hostName]["MEMORYUSAGE"] >= memoryThreshold) {
                             htmlMarkup = htmlMarkup + '<tr class="filterClass serverActive"><td class="pauseActiveMonitoring" width="40%"><a class="alertIconServ serverNameAlign" data-ip="' + systemMemory[hostName]["HOST_ID"] + '" href="javascript:void(0);">' + hostName + '</a></td>' +
@@ -1414,320 +1145,7 @@ function alertNodeClicked(obj) {
             callback(htmlMarkups);
         };
 
-        this.mapProcedureInformation = function (currentAction, priorAction, callback) {
-            var counter = 0;
-            var pageStartIndex = 0;
-            var isNextButtonClicked = false;
-            htmlMarkup = "";
-            htmlMarkups.SystemInformation = [];
-
-            if (procedureData == null || procedureData == undefined) {
-                alert("Error: Unable to extract Procedure Data");
-                return;
-            }
-
-            //if checks if tuple count is greater than 5
-            //other no needs for pagination action validation
-            if ((((voltDbRenderer.procedureTableIndex + 1) * this.maxVisibleRows < voltDbRenderer.procedureDataSize) && currentAction == VoltDbUI.ACTION_STATES.NEXT) ||
-                (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && voltDbRenderer.procedureTableIndex > 0) ||
-                currentAction == VoltDbUI.ACTION_STATES.REFRESH ||
-                currentAction == VoltDbUI.ACTION_STATES.SEARCH ||
-                currentAction == VoltDbUI.ACTION_STATES.NONE) {
-
-                if (currentAction == VoltDbUI.ACTION_STATES.NEXT) {
-                    pageStartIndex = (voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows;
-
-                }
-
-                // pageStartIndex need not be initialized if isNext is undefined(when page loads intially or during reload operation)
-                if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS) {
-                    pageStartIndex = (voltDbRenderer.procedureTableIndex - 1) * voltDbRenderer.maxVisibleRows;
-                }
-                if ((currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.NEXT) ||
-                    (currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) {
-                    pageStartIndex = (voltDbRenderer.procedureTableIndex) * voltDbRenderer.maxVisibleRows;
-
-                }
-
-                isNextButtonClicked = voltDbRenderer.isNextClicked;
-                if (isNextButtonClicked == false) {
-                    if (currentAction == VoltDbUI.ACTION_STATES.SEARCH || currentAction == VoltDbUI.ACTION_STATES.NONE) {
-                        pageStartIndex = 0;
-                        voltDbRenderer.procedureTableIndex = 0;
-                    }
-                }
-
-                var lProcedureData = voltDbRenderer.isProcedureSearch ? this.searchData.procedures : procedureData;
-                jQuery.each(lProcedureData, function (id, val) {
-                    if (currentAction == VoltDbUI.ACTION_STATES.NEXT && (voltDbRenderer.isProcedureSearch == false || voltDbRenderer.isProcedureSearch == undefined)) {
-                        if (counter >= pageStartIndex && counter <= (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                            if (counter == (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.procedureDataSize - 1) {
-                                voltDbRenderer.procedureTableIndex++;
-                                return false;
-
-                            }
-
-                        } else if (counter == pageStartIndex * 2) {
-                            voltDbRenderer.procedureTableIndex++;
-                            return false;
-
-                        }
-
-                    } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && (voltDbRenderer.isProcedureSearch == false || voltDbRenderer.isProcedureSearch == undefined)) {
-                        if (pageStartIndex >= 0 && counter >= pageStartIndex && counter < (voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows)) {
-                            setProcedureTupleHtml(val);
-                        }
-                        if (pageStartIndex >= 0 && counter == (voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                            voltDbRenderer.procedureTableIndex--;
-                        }
-                    } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS) {
-                        if (counter >= 0 && counter >= pageStartIndex && counter < voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows) {
-                            setProcedureTupleHtml(val);
-                        }
-
-                        if (pageStartIndex >= 0 && counter == (voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                            voltDbRenderer.procedureTableIndex--;
-                        }
-                    } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && priorAction == VoltDbUI.ACTION_STATES.NEXT) {
-                        if (counter >= 0 && counter >= pageStartIndex && counter < voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows) {
-                            setProcedureTupleHtml(val);
-                        }
-
-                        if (pageStartIndex >= 0 && counter == (voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                            voltDbRenderer.procedureTableIndex--;
-                        }
-                    } else if (currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.NEXT) {
-                        if (counter >= pageStartIndex && counter <= (voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                        }
-                    } else if ((currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) {
-                        if (pageStartIndex >= 0 && counter >= pageStartIndex && counter < ((voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows)) {
-                            setProcedureTupleHtml(val);
-
-                        }
-                    } else if ((currentAction == VoltDbUI.ACTION_STATES.SEARCH && priorAction == VoltDbUI.ACTION_STATES.NONE)) {
-                        if (pageStartIndex >= 0 && counter >= pageStartIndex && counter < ((voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows)) {
-                            setProcedureTupleHtml(val);
-                        }
-                    } else if ((currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.SEARCH) || (currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.NEXT)) {
-                        if (counter >= pageStartIndex && counter <= (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                        }
-
-                        if ((counter == (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.procedureSearchDataSize - 1) && htmlMarkup != "") {
-                            voltDbRenderer.procedureTableIndex++;
-                            return false;
-                        }
-                    } else if ((currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) {
-                        if (counter >= pageStartIndex && counter <= (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                        }
-
-                        if ((counter == (voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.procedureSearchDataSize - 1) && htmlMarkup != "") {
-                            voltDbRenderer.procedureTableIndex++;
-                            return false;
-
-                        }
-                    } else {
-                        if (counter < voltDbRenderer.maxVisibleRows) {
-                            setProcedureTupleHtml(val);
-                        }
-                    }
-                    counter++;
-                });
-
-
-                if (voltDbRenderer.isProcedureSearch) {
-                    if (htmlMarkup != "") {
-                        if ((currentAction == VoltDbUI.ACTION_STATES.SEARCH || currentAction == VoltDbUI.ACTION_STATES.REFRESH) && (priorAction == VoltDbUI.ACTION_STATES.SEARCH || priorAction == VoltDbUI.ACTION_STATES.REFRESH)) {
-                            $('#storeProcedureBody').html(htmlMarkup);
-
-                        }
-                        callback(currentAction, htmlMarkup);
-                    }
-                    priorAction = currentAction;
-
-                } else {
-                    htmlMarkups.SystemInformation.push(htmlMarkup);
-                    htmlMarkup = undefined;
-
-                    if (htmlMarkups.SystemInformation[0] != "")
-                        callback(currentAction, htmlMarkups);
-                }
-
-            }
-
-            if (voltDbRenderer.isSortProcedures && VoltDbUI.sortStatus == VoltDbUI.SORT_STATES.SORTED) {
-                VoltDbUI.sortStatus = VoltDbUI.SORT_STATES.NONE;
-            }
-        };
-
-        this.mapProcedureInformationSorting = function (currentAction, priorAction, callback) {
-            var counter = 0;
-            var pageStartIndex = 0;
-            var traverse = false;
-
-            htmlMarkup = "";
-            htmlMarkups.SystemInformation = [];
-
-            var iterateProcedureData = function () {
-                counter = 0;
-                var lProcedureData = voltDbRenderer.isProcedureSearch ? voltDbRenderer.searchData.procedures : procedureData;
-                jQuery.each(lProcedureData, function (id, val) {
-                    if (currentAction == VoltDbUI.ACTION_STATES.NEXT && (voltDbRenderer.isProcedureSearch == false || voltDbRenderer.isProcedureSearch == undefined)) {
-                        if (counter >= pageStartIndex && counter <= (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                            if (counter == (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.procedureDataSize - 1) {
-                                voltDbRenderer.procedureTableIndex++;
-                                return false;
-
-                            }
-
-                        } else if (counter == pageStartIndex * 2) {
-                            voltDbRenderer.procedureTableIndex++;
-                            return false;
-
-                        }
-
-                    } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && (voltDbRenderer.isProcedureSearch == false || voltDbRenderer.isProcedureSearch == undefined)) {
-                        if (pageStartIndex >= 0 && counter >= pageStartIndex && counter < (voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows)) {
-                            setProcedureTupleHtml(val);
-                        }
-                        if (pageStartIndex >= 0 && counter == (voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                            voltDbRenderer.procedureTableIndex--;
-                        }
-                    } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS) {
-                        if (counter >= 0 && counter >= pageStartIndex && counter < voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows) {
-                            setProcedureTupleHtml(val);
-                        }
-
-                        if (pageStartIndex >= 0 && counter == (voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                            voltDbRenderer.procedureTableIndex--;
-                        }
-                    } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && priorAction == VoltDbUI.ACTION_STATES.NEXT) {
-                        if (counter >= 0 && counter >= pageStartIndex && counter < voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows) {
-                            setProcedureTupleHtml(val);
-                        }
-
-                        if (pageStartIndex >= 0 && counter == (voltDbRenderer.procedureTableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                            voltDbRenderer.procedureTableIndex--;
-                        }
-                    } else if (currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.NEXT) {
-                        if (counter >= pageStartIndex && counter <= (voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                        }
-                    } else if ((currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) {
-                        if (pageStartIndex >= 0 && counter >= pageStartIndex && counter < ((voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows)) {
-                            setProcedureTupleHtml(val);
-
-                        }
-                    } else if ((currentAction == VoltDbUI.ACTION_STATES.SEARCH && priorAction == VoltDbUI.ACTION_STATES.NONE)) {
-                        if (pageStartIndex >= 0 && counter >= pageStartIndex && counter < ((voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows)) {
-                            setProcedureTupleHtml(val);
-                        }
-                    } else if ((currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.SEARCH) || (currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.NEXT)) {
-                        if (counter >= pageStartIndex && counter <= (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                        }
-
-                        if ((counter == (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.procedureSearchDataSize - 1) && htmlMarkup != "") {
-                            voltDbRenderer.procedureTableIndex++;
-                            return false;
-                        }
-                    } else if ((currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) {
-                        if (counter >= pageStartIndex && counter <= (voltDbRenderer.procedureTableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                        }
-
-                        if ((counter == (voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.procedureSearchDataSize - 1) && htmlMarkup != "") {
-                            voltDbRenderer.procedureTableIndex++;
-                            return false;
-
-                        }
-                    } else {
-                        if (counter < voltDbRenderer.maxVisibleRows) {
-                            setProcedureTupleHtml(val);
-                        }
-                    }
-                    counter++;
-                });
-            };
-
-            if (procedureData == null || procedureData == undefined) {
-                alert("Error: Unable to extract Procedure Data");
-                return;
-            }
-
-            //if checks if tuple count is greater than 5
-            //other no needs for pagination action validation
-            if ((((voltDbRenderer.procedureTableIndex + 1) * this.maxVisibleRows < voltDbRenderer.procedureDataSize) && currentAction == VoltDbUI.ACTION_STATES.NEXT) ||
-                (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && voltDbRenderer.procedureTableIndex > 0) ||
-                (currentAction == VoltDbUI.ACTION_STATES.SEARCH && !voltDbRenderer.isProcedureSortClicked) ||
-                (priorAction == VoltDbUI.ACTION_STATES.SEARCH && currentAction == VoltDbUI.ACTION_STATES.SORT) ||
-                currentAction == VoltDbUI.ACTION_STATES.REFRESH ||
-                currentAction == VoltDbUI.ACTION_STATES.SORT ||
-                currentAction == VoltDbUI.ACTION_STATES.NONE) {
-
-                if (currentAction == VoltDbUI.ACTION_STATES.NEXT) {
-                    pageStartIndex = (voltDbRenderer.procedureTableIndex + 1) * voltDbRenderer.maxVisibleRows;
-
-                }
-
-                if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS) { // pageStartIndex need not be initialized if isNext is undefined(when page loads intially or during reload operation)
-                    pageStartIndex = (voltDbRenderer.procedureTableIndex - 1) * voltDbRenderer.maxVisibleRows;
-                }
-
-                if ((currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.NEXT) ||
-                    (currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) {
-                    pageStartIndex = (voltDbRenderer.procedureTableIndex) * voltDbRenderer.maxVisibleRows;
-
-                }
-
-                if (currentAction == VoltDbUI.ACTION_STATES.SEARCH || currentAction == VoltDbUI.ACTION_STATES.NONE ||
-                    (currentAction == VoltDbUI.ACTION_STATES.REFRESH && voltDbRenderer.isSortProcedures == true) ||
-                    (currentAction == VoltDbUI.ACTION_STATES.SORT)) {
-                    pageStartIndex = 0;
-                    voltDbRenderer.procedureTableIndex = 0;
-                }
-                iterateProcedureData();
-
-
-            } else {
-                //if previous is infinitely and sorting is clicked
-                if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS || voltDbRenderer.isProcedureSortClicked) {
-                    pageStartIndex = 0;
-                    voltDbRenderer.procedureTableIndex = 0;
-
-                    var lProcedureData = voltDbRenderer.isProcedureSearch ? this.searchData.procedures : procedureData;
-                    jQuery.each(lProcedureData, function (id, val) {
-                        if (counter >= pageStartIndex && counter <= voltDbRenderer.maxVisibleRows - 1) {
-                            setProcedureTupleHtml(val);
-                            counter++;
-                        }
-                    });
-                    priorAction = currentAction;
-
-                }
-
-            }
-
-            if (voltDbRenderer.isSortProcedures && VoltDbUI.sortStatus == VoltDbUI.SORT_STATES.SORTED) {
-                VoltDbUI.sortStatus = VoltDbUI.SORT_STATES.NONE;
-            }
-
-            if (voltDbRenderer.getLatencyGraphInformationcurrentProcedureAction == VoltDbUI.ACTION_STATES.SEARCH) {
-                voltDbRenderer.priorProcedureAction = voltDbRenderer.currentProcedureAction;
-            }
-
-            voltDbRenderer.currentProcedureAction = VoltDbUI.ACTION_STATES.REFRESH;
-            VoltDbUI.CurrentProcedureDataProgress = VoltDbUI.DASHBOARD_PROGRESS_STATES.REFRESH_PROCEDUREDATA_NONE;
-
-            callback(htmlMarkup);
-
-        };
-
-        this.mapTableInformation = function (currentAction, priorAction, isSearch, callback) {
+        this.mapTableInformation = function (callback) {
             var counter = 0;
             var tablePageStartIndex = 0;
 
@@ -1735,163 +1153,7 @@ function alertNodeClicked(obj) {
                 alert("Error: Unable to extract Table Data");
                 return;
             }
-
-            htmlTableMarkup = "";
-            htmlTableMarkups.SystemInformation = [];
-
-            if ((((voltDbRenderer.tableIndex + 1) * this.maxVisibleRows < voltDbRenderer.tableDataSize) && currentAction == VoltDbUI.ACTION_STATES.NEXT) ||
-                (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && voltDbRenderer.tableIndex > 0) ||
-                currentAction == VoltDbUI.ACTION_STATES.REFRESH ||
-                currentAction == VoltDbUI.ACTION_STATES.SEARCH ||
-                currentAction == VoltDbUI.ACTION_STATES.NONE ||
-                voltDbRenderer.isTableSortClicked) {
-                if (currentAction == VoltDbUI.ACTION_STATES.NEXT) {
-                    tablePageStartIndex = (voltDbRenderer.tableIndex + 1) * voltDbRenderer.maxVisibleRows;
-
-                }
-
-                else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS) { // pageStartIndex need not be initialized if isNext is undefined(when page loads intially or during reload operation)
-                    tablePageStartIndex = (voltDbRenderer.tableIndex - 1) * voltDbRenderer.maxVisibleRows;
-
-                }
-
-                else if (((currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.NEXT) ||
-                    (currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) && !voltDbRenderer.isTableSortClicked) {
-                    if (voltDbRenderer.isSearchTextCleaned) {
-                        tablePageStartIndex = 0;
-                        voltDbRenderer.tableIndex = 0;
-                    }
-
-                    else
-                        tablePageStartIndex = (voltDbRenderer.tableIndex) * voltDbRenderer.maxVisibleRows;
-
-                }
-
-                else if (currentAction == VoltDbUI.ACTION_STATES.SEARCH || currentAction == VoltDbUI.ACTION_STATES.NONE || voltDbRenderer.isTableSortClicked == true) {
-                    tablePageStartIndex = 0;
-                    voltDbRenderer.tableIndex = 0;
-
-                }
-
-                var lTableData = this.isTableSearch ? this.searchData.tables : tableData;
-                if (this.isTableSearch == false) voltDbRenderer.tableDataSize = Object.keys(tableData).length;
-
-                voltDbRenderer.drTablesArray = [];
-                voltDbRenderer.exportTablesArray = [];
-
-                $.each(lTableData, function (id, val) {
-                    if (val['drEnabled'] == "true") {
-                        voltDbRenderer.drTablesArray.push(val['TABLE_NAME']);
-                    }
-
-                    if (val['TABLE_TYPE1'] == "EXPORT") {
-                        voltDbRenderer.exportTablesArray.push(val['TABLE_NAME']);
-                    }
-
-                    if (lTableData)
-                        if (currentAction == VoltDbUI.ACTION_STATES.NEXT && (voltDbRenderer.isTableSearch == false || voltDbRenderer.isTableSearch == undefined)) {
-                            if (counter >= tablePageStartIndex && counter <= (voltDbRenderer.tableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                                setTableTupleDataHtml(val, id);
-                                if (counter == (voltDbRenderer.tableIndex + 2) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.tableDataSize - 1) {
-                                    voltDbRenderer.tableIndex++;
-                                    return false;
-                                }
-
-                            } else if (counter == tablePageStartIndex * 2) {
-                                voltDbRenderer.tableIndex++;
-                                return false;
-                            }
-
-                        } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && (voltDbRenderer.isTableSearch == false || voltDbRenderer.isTableSearch == undefined)) {
-                            if (tablePageStartIndex >= 0 && counter >= tablePageStartIndex && counter < (voltDbRenderer.tableIndex * voltDbRenderer.maxVisibleRows)) {
-                                setTableTupleDataHtml(val, id);
-                            }
-                            if (tablePageStartIndex >= 0 && counter == (voltDbRenderer.tableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                                voltDbRenderer.tableIndex--;
-                            }
-
-                        } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS) {
-                            if (counter >= 0 && counter >= tablePageStartIndex && counter < voltDbRenderer.tableIndex * voltDbRenderer.maxVisibleRows) {
-                                setTableTupleDataHtml(val, id);
-                            }
-
-                            if (tablePageStartIndex >= 0 && counter == (voltDbRenderer.tableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                                voltDbRenderer.tableIndex--;
-                            }
-
-                        } else if (currentAction == VoltDbUI.ACTION_STATES.PREVIOUS && priorAction == VoltDbUI.ACTION_STATES.NEXT) {
-                            if (counter >= 0 && counter >= tablePageStartIndex && counter < voltDbRenderer.tableIndex * voltDbRenderer.maxVisibleRows) {
-                                setTableTupleDataHtml(val, id);
-                            }
-
-                            if (tablePageStartIndex >= 0 && counter == (voltDbRenderer.tableIndex * voltDbRenderer.maxVisibleRows - 1)) {
-                                voltDbRenderer.tableIndex--;
-                            }
-
-                        } else if (currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.NEXT) {
-                            if (counter >= tablePageStartIndex && counter <= (voltDbRenderer.tableIndex + 1) * voltDbRenderer.maxVisibleRows - 1) {
-                                setTableTupleDataHtml(val, id);
-                            }
-
-                        } else if ((currentAction == VoltDbUI.ACTION_STATES.REFRESH && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) {
-                            if (tablePageStartIndex >= 0 && counter >= tablePageStartIndex && counter < ((voltDbRenderer.tableIndex + 1) * voltDbRenderer.maxVisibleRows)) {
-                                setTableTupleDataHtml(val, id);
-
-                            }
-
-                        } else if ((currentAction == VoltDbUI.ACTION_STATES.SEARCH && priorAction == VoltDbUI.ACTION_STATES.NONE) || (currentAction == VoltDbUI.ACTION_STATES.SEARCH && priorAction == VoltDbUI.ACTION_STATES.SEARCH) ||
-                        (currentAction == VoltDbUI.ACTION_STATES.SEARCH && priorAction == VoltDbUI.ACTION_STATES.REFRESH)) {
-                            if (tablePageStartIndex >= 0 && counter >= tablePageStartIndex && counter < ((voltDbRenderer.tableIndex + 1) * voltDbRenderer.maxVisibleRows)) {
-                                setTableTupleDataHtml(val, id);
-                            }
-
-                        } else if ((currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.SEARCH) || (currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.NEXT)) {
-                            if (counter >= tablePageStartIndex && counter <= (voltDbRenderer.tableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                                setTableTupleDataHtml(val, id);
-                            }
-
-                            if ((counter == (voltDbRenderer.tableIndex + 2) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.tableSearchDataSize - 1) && htmlTableMarkup != "") {
-                                voltDbRenderer.tableIndex++;
-                                return false;
-                            }
-
-                        } else if ((currentAction == VoltDbUI.ACTION_STATES.NEXT && priorAction == VoltDbUI.ACTION_STATES.PREVIOUS)) {
-                            if (counter >= tablePageStartIndex && counter <= (voltDbRenderer.tableIndex + 2) * voltDbRenderer.maxVisibleRows - 1) {
-                                setTableTupleDataHtml(val, id);
-                            }
-
-                            if ((counter == (voltDbRenderer.tableIndex + 1) * voltDbRenderer.maxVisibleRows - 1 || counter == voltDbRenderer.tableSearchDataSize - 1) && htmlTableMarkup != "") {
-                                voltDbRenderer.tableIndex++;
-                                return false;
-                            }
-
-                        } else {
-                            if (counter < voltDbRenderer.maxVisibleRows) {
-                                setTableTupleDataHtml(val, id);
-                            }
-
-                        }
-                    counter++;
-
-                });
-
-
-                if (voltDbRenderer.isSortTables) {
-                    callback(htmlTableMarkup);
-                    htmlTableMarkup = "";
-                }
-                else {
-                    htmlTableMarkups.SystemInformation.push(htmlTableMarkup);
-                    htmlTableMarkup = "";
-                    callback(htmlTableMarkups.SystemInformation);
-
-                }
-
-                if (voltDbRenderer.isSortTables && VoltDbUI.tableSortStatus == VoltDbUI.SORT_STATES.SORTED) {
-                    VoltDbUI.tableSortStatus = VoltDbUI.SORT_STATES.NONE;
-                }
-            }
-
+            callback(tableData);
         };
 
         this.getVersion = function (serverName) {
@@ -1933,95 +1195,27 @@ function alertNodeClicked(obj) {
             return clusterInfo;
         };
 
-        this.sortTablesByColumns = function (isSearched) {
-            var lConnection = VoltDBService.getTablesContextForSorting();
-
-            if (voltDbRenderer.isTableSearch) {
-                voltDbRenderer.formatSearchTablesDataToJsonArray(lConnection, $('#filterDatabaseTable')[0].value, isSearched);
-
-                if (voltDbRenderer.sortTableOrder == "descending") {
-                    tableSearchJsonArray = descendingSortJSON(tableSearchJsonArray, this.tableSortColumn);
-                }
-
-                else if (voltDbRenderer.sortTableOrder == "ascending") {
-                    tableSearchJsonArray = ascendingSortJSON(tableSearchJsonArray, this.tableSortColumn);
-                }
-                mapJsonArrayToSearchedTables();
-            }
-
-            else if (!voltDbRenderer.isTableSearch) {
-                populateTableJsonArray(lConnection);
-
-                if (voltDbRenderer.sortTableOrder == "descending") {
-                    tableJsonArray = descendingSortJSON(tableJsonArray, this.tableSortColumn);
-                }
-
-                else if (voltDbRenderer.sortTableOrder == "ascending") {
-                    tableJsonArray = ascendingSortJSON(tableJsonArray, this.tableSortColumn);
-                }
-                mapJsonArrayToTables();
-
-            }
-
-        };
-
-        this.sortProceduresByColumns = function (isSearched) {
-            var isSorted = false;
-            if (!voltDbRenderer.isProcedureSearch) {
-                var lConnection = VoltDBService.getProcedureContextForSorting();
-                if (lConnection != null) {
-                    populateProcedureJsonArrayForSorting(lConnection);
-
-                    if (voltDbRenderer.sortOrder == "descending") {
-                        procedureJsonArray = descendingSortJSON(procedureJsonArray, this.sortColumn);
-                    }
-
-                    else if (voltDbRenderer.sortOrder == "ascending") {
-                        procedureJsonArray = ascendingSortJSON(procedureJsonArray, this.sortColumn);
-                    }
-                    mapJsonArrayToProcedures();
-                    isSorted = true;
-
-                } else {
-                    isSorted = false;
-                }
-
-            }
-            else if (voltDbRenderer.isProcedureSearch) {
-                voltDbRenderer.formatSearchDataToJsonArray(isSearched);
-
-                if (voltDbRenderer.sortOrder == "descending") {
-                    procedureSearchJsonArray = descendingSortJSON(procedureSearchJsonArray, this.sortColumn);
-                }
-
-                else if (voltDbRenderer.sortOrder == "ascending") {
-                    procedureSearchJsonArray = ascendingSortJSON(procedureSearchJsonArray, this.sortColumn);
-                }
-                mapJsonArrayToSearchedProcedures();
-                isSorted = true;
-            }
-            return isSorted;
-        };
-
         var getLatencyDetails = function (connection, latency) {
 
             var colIndex = {};
             var counter = 0;
 
-            connection.Metadata['@Statistics_LATENCY_HISTOGRAM'].schema.forEach(function (columnInfo) {
-                if (columnInfo["name"] == "HOSTNAME" || columnInfo["name"] == "UNCOMPRESSED_HISTOGRAM" || columnInfo["name"] == "TIMESTAMP")
+            connection.Metadata['@Statistics_LATENCY'].schema.forEach(function (columnInfo) {
+                if (columnInfo["name"] == "HOSTNAME" || columnInfo["name"] == "P99"
+                || columnInfo["name"] == "TIMESTAMP" || columnInfo["name"] == "TPS")
                     colIndex[columnInfo["name"]] = counter;
 
                 counter++;
             });
 
-            connection.Metadata['@Statistics_LATENCY_HISTOGRAM'].data.forEach(function (info) {
+            connection.Metadata['@Statistics_LATENCY'].data.forEach(function (info) {
                 var hostName = info[colIndex["HOSTNAME"]];
                 if (!latency.hasOwnProperty(hostName)) {
                     latency[hostName] = {};
                 }
                 latency[hostName]["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
-                latency[hostName]["UNCOMPRESSED_HISTOGRAM"] = info[colIndex["UNCOMPRESSED_HISTOGRAM"]];
+                latency[hostName]["P99"] = info[colIndex["P99"]]/1000;
+                latency[hostName]["TPS"] = info[colIndex["TPS"]];
             });
         };
 
@@ -2124,6 +1318,81 @@ function alertNodeClicked(obj) {
             });
         };
 
+        var getImporterDetails = function (connection, importerDetails) {
+            var colIndex = {};
+            var counter = 0;
+
+            if (connection.Metadata['@Statistics_IMPORTER'] == null) {
+                return;
+            }
+
+            connection.Metadata['@Statistics_IMPORTER'].schema.forEach(function (columnInfo) {
+                if (columnInfo["name"] == "TIMESTAMP" || columnInfo["name"] == "HOSTNAME"
+                || columnInfo["name"] == "SUCCESSES" || columnInfo["name"] == "FAILURES"
+                || columnInfo["name"] == "OUTSTANDING_REQUESTS" || columnInfo["name"] == "IMPORTER_NAME")
+                    colIndex[columnInfo["name"]] = counter;
+                counter++;
+            });
+
+            if(connection.Metadata["@Statistics_IMPORTER"].data.length > 0){
+                var rowCount = connection.Metadata["@Statistics_IMPORTER"].data.length
+                var success = 0;
+                var failures = 0;
+                var outStanding = 0;
+                var importerName = ""
+                connection.Metadata["@Statistics_IMPORTER"].data.forEach(function (info) {
+                    if(importerName != info[colIndex["IMPORTER_NAME"]]){
+                        importerName = info[colIndex["IMPORTER_NAME"]];
+                        success = 0;
+                        failures = 0;
+                        outStanding = 0;
+                    }
+                    if (!importerDetails.hasOwnProperty("SUCCESSES")) {
+                        importerDetails["SUCCESSES"] = {};
+                        importerDetails["FAILURES"]= {};
+                        importerDetails["OUTSTANDING_REQUESTS"]= {};
+                    }
+                    outStanding += info[colIndex["OUTSTANDING_REQUESTS"]];
+                    success += info[colIndex["SUCCESSES"]];
+                    failures += info[colIndex["FAILURES"]];
+
+                    importerDetails["SUCCESSES"][importerName] = success;
+                    importerDetails["SUCCESSES"]["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
+                    importerDetails["FAILURES"][importerName] = failures;
+                    importerDetails["FAILURES"]["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
+                    importerDetails["OUTSTANDING_REQUESTS"][importerName] = outStanding;
+                    importerDetails["HOSTNAME"] = info[colIndex["HOSTNAME"]];
+                    importerDetails["OUTSTANDING_REQUESTS"]["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
+
+                });
+            }
+        };
+
+        var getLiveClientData = function (connection, clientInfo) {
+            var trans = 0
+            var bytes = 0
+            var msgs  = 0
+            if(!clientInfo.hasOwnProperty('CLIENTS'))
+                clientInfo['CLIENTS'] = {}
+
+            if (connection.Metadata['@Statistics_LIVECLIENTS'] == undefined || $.isEmptyObject(connection.Metadata['@Statistics_LIVECLIENTS'].data)) {
+                clientInfo['CLIENTS']['bytes'] = 0;
+                clientInfo['CLIENTS']['msgs'] = 0;
+                clientInfo['CLIENTS']['trans'] = 0;
+                return;
+            }
+
+            connection.Metadata['@Statistics_LIVECLIENTS'].data.forEach(function (info) {
+                bytes += info[6]
+                msgs += info[7]
+                trans += info[8]
+            });
+
+            clientInfo['CLIENTS']['bytes'] = bytes;
+            clientInfo['CLIENTS']['msgs'] = msgs;
+            clientInfo['CLIENTS']['trans'] = trans;
+        };
+
         //Get DR Status Information
         var getDrStatus = function (connection, drDetails) {
             var colIndex = {};
@@ -2170,7 +1439,7 @@ function alertNodeClicked(obj) {
 
 
             connection.Metadata['@Statistics_DR_completeData'][0].schema.forEach(function (columnInfo) {
-                if (columnInfo["name"] == "PARTITION_ID" || columnInfo["name"] == "TOTALBUFFERS" || columnInfo["name"] == "TIMESTAMP" || columnInfo["name"] == "TOTALBYTES" || columnInfo["name"] == "MODE" || columnInfo["name"] == "LASTQUEUEDDRID" || columnInfo["name"] == "LASTACKDRID" || columnInfo["name"] == "LASTQUEUEDTIMESTAMP" || columnInfo["name"] == "LASTACKTIMESTAMP")
+                if (columnInfo["name"] == "PARTITION_ID" || columnInfo["name"] == "TOTALBUFFERS" || columnInfo["name"] == "TIMESTAMP" || columnInfo["name"] == "TOTALBYTES" || columnInfo["name"] == "MODE" || columnInfo["name"] == "LASTQUEUEDDRID" || columnInfo["name"] == "LASTACKDRID" || columnInfo["name"] == "LASTQUEUEDTIMESTAMP" || columnInfo["name"] == "LASTACKTIMESTAMP" || columnInfo["name"] == "CLUSTER_ID"|| columnInfo["name"] == "REMOTE_CLUSTER_ID")
                     colIndex[columnInfo["name"]] = counter;
                 counter++;
             });
@@ -2178,13 +1447,18 @@ function alertNodeClicked(obj) {
             counter = 0;
 
             connection.Metadata['@Statistics_DR_completeData'][0].data.forEach(function (info) {
+                var cluster_id = info[colIndex["CLUSTER_ID"]]
+                var producer_cluster_id = info[colIndex["REMOTE_CLUSTER_ID"]]
                 //Filter Master from Replica
                 if (info[colIndex["MODE"]] == "NORMAL") {
                     var partitionId = info[colIndex["PARTITION_ID"]];
-                    if (!drDetails.hasOwnProperty(partitionId)) {
-                        drDetails[partitionId] = [];
+                    if (!drDetails.hasOwnProperty(cluster_id + '_' + producer_cluster_id)) {
+                        drDetails[cluster_id + '_' + producer_cluster_id] = {};
                     }
 
+                    if (!drDetails[cluster_id + '_' + producer_cluster_id].hasOwnProperty(partitionId)) {
+                            drDetails[cluster_id + '_' + producer_cluster_id][partitionId] = [];
+                    }
                     var partitionDetails = {};
                     partitionDetails["TOTALBUFFERS"] = info[colIndex["TOTALBUFFERS"]];
                     partitionDetails["TOTALBYTES"] = info[colIndex["TOTALBYTES"]];
@@ -2193,11 +1467,12 @@ function alertNodeClicked(obj) {
                     partitionDetails["LASTACKDRID"] = info[colIndex["LASTACKDRID"]];
                     partitionDetails["LASTQUEUEDTIMESTAMP"] = info[colIndex["LASTQUEUEDTIMESTAMP"]];
                     partitionDetails["LASTACKTIMESTAMP"] = info[colIndex["LASTACKTIMESTAMP"]];
-                    drDetails[partitionId].push(partitionDetails);
+                    partitionDetails["REMOTE_CLUSTER_ID"] = info[colIndex["REMOTE_CLUSTER_ID"]];
+                    drDetails[cluster_id + '_' + producer_cluster_id][partitionId].push(partitionDetails);
                 }
+                    drDetails["CLUSTER_ID"] = info[colIndex["CLUSTER_ID"]];
             });
         };
-
 
         //Get Replication Information
         var getReplicationDetails = function (connection, replicationDetails, processName) {
@@ -2233,6 +1508,22 @@ function alertNodeClicked(obj) {
         };
         //
 
+        //PM
+        var getDrRoleDetails = function (connection, drRoleDetails) {
+            var hostName = "";
+            var drRoles = []
+
+            if (connection.Metadata['@Statistics_DRROLE'] == null || $.isEmptyObject(connection.Metadata['@Statistics_DRROLE'])) {
+                return;
+            }
+
+            connection.Metadata['@Statistics_DRROLE'].data.forEach(function (info) {
+                drRoles.push(info)
+            });
+
+            drRoleDetails['DRROLE'] =  drRoles;
+        };
+
         //Get DR Replication Data
         var getDrReplicationData = function (connection, replicationDetails) {
             var colIndex = {};
@@ -2242,9 +1533,9 @@ function alertNodeClicked(obj) {
             if (connection.Metadata['@Statistics_DRCONSUMER'] == null) {
                 return;
             }
-
             connection.Metadata['@Statistics_DRCONSUMER'].schema.forEach(function (columnInfo) {
-                if (columnInfo["name"] == "HOSTNAME" || columnInfo["name"] == "TIMESTAMP" || columnInfo["name"] == "REPLICATION_RATE_1M" || columnInfo["name"] == "HOST_ID" || columnInfo["name"] == "STATE" || columnInfo["name"] == "REPLICATION_RATE_5M" || columnInfo["name"] == "CLUSTER_ID")
+                if (columnInfo["name"] == "HOSTNAME" || columnInfo["name"] == "TIMESTAMP" || columnInfo["name"] == "REPLICATION_RATE_1M" || columnInfo["name"] == "HOST_ID" ||
+                columnInfo["name"] == "STATE" || columnInfo["name"] == "REPLICATION_RATE_5M" || columnInfo["name"] == "CLUSTER_ID" || columnInfo["name"] == "REMOTE_CLUSTER_ID")
                     colIndex[columnInfo["name"]] = counter;
                 counter++;
             });
@@ -2257,13 +1548,20 @@ function alertNodeClicked(obj) {
             });
 
             connection.Metadata['@Statistics_DRCONSUMER'].data.forEach(function (info) {
+                var cluster_id = info[colIndex["CLUSTER_ID"]]
+                var producer_cluster_id = info[colIndex["REMOTE_CLUSTER_ID"]]
+
                 if (!replicationDetails.hasOwnProperty("DR_GRAPH")) {
                     replicationDetails["DR_GRAPH"] = {};
-                    replicationDetails["DR_GRAPH"]["REPLICATION_DATA"] = [];
                 }
-
-                replicationRate1M += (info[colIndex["REPLICATION_RATE_1M"]] == null || info[colIndex["REPLICATION_RATE_1M"]] < 0) ? 0 : info[colIndex["REPLICATION_RATE_1M"]];
-
+                if(!replicationDetails["DR_GRAPH"].hasOwnProperty(cluster_id + '_' + producer_cluster_id)){
+                    replicationDetails["DR_GRAPH"][cluster_id + '_' + producer_cluster_id] = {}
+                    replicationDetails["DR_GRAPH"][cluster_id + '_' + producer_cluster_id]["REPLICATION_DATA"] = [];
+                    replicationDetails["DR_GRAPH"][cluster_id + '_' + producer_cluster_id]['REPLICATION_RATE_1M'] = 0
+                }
+                replicationRate1M = (info[colIndex["REPLICATION_RATE_1M"]] == null || info[colIndex["REPLICATION_RATE_1M"]] < 0) ? 0 : info[colIndex["REPLICATION_RATE_1M"]] / 1000;
+                replicationDetails["DR_GRAPH"][cluster_id + '_' + producer_cluster_id]['REPLICATION_RATE_1M'] += replicationRate1M;
+                replicationDetails["DR_GRAPH"][cluster_id + '_' + producer_cluster_id]["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
                 var repData = {};
                 repData["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
                 replicationDetails["DR_GRAPH"]["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
@@ -2273,12 +1571,12 @@ function alertNodeClicked(obj) {
                 repData["STATE"] = info[colIndex["STATE"]];
                 repData["REPLICATION_RATE_5M"] = info[colIndex["REPLICATION_RATE_5M"]] / 1000;
                 repData["REPLICATION_RATE_1M"] = info[colIndex["REPLICATION_RATE_1M"]] / 1000;
-                replicationDetails["DR_GRAPH"]["REPLICATION_DATA"].push(repData);
+                replicationDetails["DR_GRAPH"]["REMOTE_CLUSTER_ID"] = info[colIndex["REMOTE_CLUSTER_ID"]];
+                replicationDetails["DR_GRAPH"][cluster_id + '_' + producer_cluster_id]["REPLICATION_DATA"].push(repData);
 
             });
 
             replicationDetails["DR_GRAPH"]['WARNING_COUNT'] = getReplicationNotCovered(connection.Metadata['@Statistics_DRCONSUMER_completeData'][1], colIndex2['IS_COVERED']);
-            replicationDetails["DR_GRAPH"]["REPLICATION_RATE_1M"] = replicationRate1M / 1000;
         };
 
         var getDrConsumerData = function(connection, drConsumerDetails) {
@@ -2324,6 +1622,176 @@ function alertNodeClicked(obj) {
                 var clusterId = (info[colIndex["CLUSTER_ID"]] == undefined ? "N/A" : info[colIndex["CLUSTER_ID"]]);
                 replicationDetails[hostName]["CLUSTER_ID"] = clusterId;
             });
+        };
+
+        var getDrProducerInfo = function (connection, drDetails) {
+            if (connection.Metadata['@Statistics_DRPRODUCER_completeData'] == null || $.isEmptyObject(connection.Metadata['@Statistics_DRPRODUCER_completeData'])) {
+                return;
+            }
+
+            var partition_max = drDetails["DrProducer"]["partition_max"];
+            var partition_min = drDetails["DrProducer"]["partition_min"];
+            var partition_min_host = drDetails["DrProducer"]["partition_min_host"];
+            var colIndex = {};
+            var counter = 0;
+
+            $.each(partition_min, function(key, value){
+                // reset all min values to find the new min
+                if($.inArray(key, partition_max_key) != -1){
+                    var partition_max_key = Object.keys(partition_max);
+                    partition_min[key] = partition_max[key]
+                }
+            });
+
+            connection.Metadata['@Statistics_DRPRODUCER_completeData'][0].schema.forEach(function (columnInfo) {
+                if (columnInfo["name"] == "PARTITION_ID" || columnInfo["name"] == "HOSTNAME" || columnInfo["name"] == "LASTQUEUEDDRID"
+                || columnInfo["name"] == "LASTACKDRID" || columnInfo["name"] == "STREAMTYPE" || columnInfo["name"] == "TOTALBYTES"
+                ){
+                    colIndex[columnInfo["name"]] = counter;
+                }
+                counter++;
+            });
+
+            connection.Metadata['@Statistics_DRPRODUCER_completeData'][0].data.forEach(function (info) {
+                var partition_min_key = Object.keys(partition_min);
+                var partition_max_key = Object.keys(partition_max);
+
+                var pid = info[colIndex['PARTITION_ID']];
+                var hostname = info[colIndex['HOSTNAME']].toString();
+                var last_queued = -1
+                var last_acked = -1
+
+                if(info[colIndex['LASTQUEUEDDRID']].toString() != 'None')
+                    last_queued = info[colIndex['LASTQUEUEDDRID']]
+
+                if(info[colIndex['LASTACKDRID']].toString() != 'None')
+                    last_acked = info[colIndex['LASTACKDRID']]
+
+                if(last_queued == -1 && last_acked == -1)
+                    return true;
+
+                // check TOTALBYTES
+                if (info[colIndex['TOTALBYTES']] > 0){
+                    // track the highest seen drId for each partition. use last queued to get the upper bound
+                    if($.inArray(pid, partition_max_key) != -1)
+                        partition_max[pid] = Math.max(last_queued, partition_max[pid])
+                    else
+                        partition_max[pid] = last_queued
+
+                    if($.inArray(pid, partition_min_key) != -1){
+                        if(last_acked < partition_min[pid]){
+                            // this replica is farther behind
+                            partition_min[pid] = last_acked
+                        }
+                    } else {
+                        partition_min_host[pid] = []
+                        partition_min[pid] = last_acked
+                    }
+                    partition_min_host[pid].push(hostname)
+                } else {
+                    // this hostname's partition has an empty InvocationBufferQueue
+                    if($.inArray(pid, partition_min_key) != -1){
+                        // it was not empty on a previous call
+                        partition_min_host[pid] = $.grep(partition_min_host[pid], function(value) {
+                                                      return value != hostname;
+                                                    });
+                        if (partition_min_host[pid] == undefined || partition_min_host[pid].length == 0){
+                            delete partition_min_host[pid]
+                            delete partition_min[pid]
+                        }
+                    }
+                    if($.inArray(pid, partition_max_key) != -1){
+
+                        if(partition_max[pid] > last_acked){
+                            console.log("DR Producer reports no data for partition "+ pid +" on host "+ hostname +
+                            " but last acked drId ("+ last_acked +
+                            ") does not match other hosts last acked drId ("+ partition_max[pid] +")");
+                        }
+                        partition_max[pid] = Math.max(last_acked, partition_max[pid])
+                    } else {
+                        partition_max[pid] = last_acked
+                    }
+                }
+            });
+
+            if (!drDetails.hasOwnProperty("DrProducer")) {
+                drDetails["DrProducer"] = {};
+            }
+
+            drDetails["DrProducer"]["partition_max"] = partition_max;
+            drDetails["DrProducer"]["partition_min"] = partition_min;
+            drDetails["DrProducer"]["partition_min_host"] = partition_min_host;
+        };
+
+        var getExportTableInfo = function (connection, exportTableDetails) {
+            if (connection.Metadata['@Statistics_TABLE_EXPORT_TABLE_INFORMATION_completeData'] == null || $.isEmptyObject(connection.Metadata['@Statistics_TABLE_EXPORT_TABLE_INFORMATION_completeData'])) {
+                exportTableDetails["ExportTables"]["collection_time"] = 1
+                return;
+            }
+            var export_tables_with_data = exportTableDetails["ExportTables"]["export_tables_with_data"];
+            var last_collection_time = exportTableDetails["ExportTables"]["last_collection_time"];
+            var tablestats = null;
+            var collection_time = 0;
+            var export_tables = 0;
+            if(connection.Metadata['@Statistics_TABLE_EXPORT_TABLE_INFORMATION_completeData'][0].data.length == 0){
+                exportTableDetails["ExportTables"]["collection_time"] = 1
+                return;
+            } else {
+                tablestats = connection.Metadata['@Statistics_TABLE_EXPORT_TABLE_INFORMATION_completeData'][0].data
+                if(tablestats.length == 0){
+                    exportTableDetails["ExportTables"]["collection_time"] = 1
+                    return;
+                }
+                var firsttuple = tablestats[0]
+                if(firsttuple[0] == last_collection_time){
+                    // this statistic is the same cached set as the last call
+                    exportTableDetails["ExportTables"]["collection_time"] = collection_time
+                    return;
+                } else {
+                    collection_time = firsttuple[0]
+                }
+            }
+
+            connection.Metadata['@Statistics_TABLE_EXPORT_TABLE_INFORMATION_completeData'][0].data.forEach(function (info) {
+                // first look for streaming (export) tables
+                if(info[6].toString() == 'StreamedTable'){
+                    var pendingData = info[8]
+                    tablename = info[5].toString()
+                    pid = info[4]
+                    hostname = info[2].toString()
+                    if(pendingData > 0){
+                        var export_tables_with_data_key = Object.keys(export_tables_with_data)
+                        if($.inArray(tablename, export_tables_with_data_key) == -1)
+                            export_tables_with_data[tablename] = {}
+                        var tabledata = export_tables_with_data[tablename]
+                        var tableDataKeys =  Object.keys(tabledata)
+                        if($.inArray(hostname, tableDataKeys) == -1)
+                            tabledata[hostname] = []
+                        tabledata[hostname].push(pid)
+                    }
+                    else {
+                        var export_tables_with_data_key = Object.keys(export_tables_with_data)
+                        if($.inArray(tablename, export_tables_with_data_key) != -1){
+                            var tabledata = export_tables_with_data[tablename]
+                            var tableDataKeys =  Object.keys(tabledata)
+                            if($.inArray(hostname, tableDataKeys) != -1){
+                                tabledata[hostname] = $.grep(tabledata[hostname], function(value) {
+                                                      return value != pid;
+                                                    });
+                                if($.isEmptyObject(tabledata[hostname])){
+                                    delete tabledata[hostname]
+                                    if($.isEmptyObject(export_tables_with_data[tablename]))
+                                        delete export_tables_with_data[tablename]
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            exportTableDetails["ExportTables"]["export_tables_with_data"] = export_tables_with_data;
+            exportTableDetails["ExportTables"]["last_collection_time"] = last_collection_time;
+            exportTableDetails["ExportTables"]["collection_time"] = collection_time
         };
 
         var getReplicationNotCovered = function (replicationData, index) {
@@ -2444,7 +1912,6 @@ function alertNodeClicked(obj) {
             partitionDetail["partitionDetail"]["timeStamp"] = timeStamp;
         };
 
-
         var getClusterDetails = function (connection, clusterDetails, processName) {
             var suffix = "";
             suffix = "_" + processName;
@@ -2485,7 +1952,6 @@ function alertNodeClicked(obj) {
             var currentTimerTick = 0;
             var procStats = {};
 
-            //connection.Metadata['@Statistics_PROCEDUREPROFILE_GRAPH_TRANSACTION'] = GetTestProcedureData(connection);
             if (connection.Metadata['@Statistics_PROCEDUREPROFILE_GRAPH_TRANSACTION'] == null) {
                 return;
             }
@@ -2500,28 +1966,27 @@ function alertNodeClicked(obj) {
             if(jQuery.isEmptyObject(connection.Metadata['@Statistics_PROCEDUREPROFILE_GRAPH_TRANSACTION'].data) && voltDbRenderer.memoryDetails.length != 0){
                 sysTransaction["TimeStamp"] = voltDbRenderer.memoryDetails[voltDbRenderer.memoryDetails.length - 1]
                 currentTimerTick =sysTransaction["TimeStamp"];
-              }
-            else{
+            } else {
                 connection.Metadata['@Statistics_PROCEDUREPROFILE_GRAPH_TRANSACTION'].data.forEach(function (table) {
-                var srcData = table;
-                var data = null;
-                currentTimerTick = srcData[colIndex["TIMESTAMP"]];
-                if (srcData[colIndex["PROCEDURE"]] in procStats) {
-                    data = procStats[srcData[colIndex["PROCEDURE"]]];
-                    data[1] = srcData[colIndex["INVOCATIONS"]];
-                    data[2] = srcData[colIndex["WEIGHTED_PERC"]];
-                    data[3] = srcData[colIndex["MIN"]];
-                    data[4] = srcData[colIndex["AVG"]];
-                    data[5] = srcData[colIndex["MAX"]];
-                } else {
-                    data = [srcData[colIndex["PROCEDURE"]], srcData[colIndex["INVOCATIONS"]], srcData[colIndex["WEIGHTED_PERC"]], srcData[colIndex["MIN"]], srcData[colIndex["AVG"]], srcData[colIndex["MAX"]]];
-                }
-                procStats[srcData[colIndex["PROCEDURE"]]] = data;
-                if (dataCount == connection.Metadata['@Statistics_PROCEDUREPROFILE_GRAPH_TRANSACTION'].data.length - 1) {
-                    sysTransaction["TimeStamp"] = srcData[colIndex["TIMESTAMP"]];
-                }
-                dataCount++;
-            });
+                    var srcData = table;
+                    var data = null;
+                    currentTimerTick = srcData[colIndex["TIMESTAMP"]];
+                    if (srcData[colIndex["PROCEDURE"]] in procStats) {
+                        data = procStats[srcData[colIndex["PROCEDURE"]]];
+                        data[1] = srcData[colIndex["INVOCATIONS"]];
+                        data[2] = srcData[colIndex["WEIGHTED_PERC"]];
+                        data[3] = srcData[colIndex["MIN"]];
+                        data[4] = srcData[colIndex["AVG"]];
+                        data[5] = srcData[colIndex["MAX"]];
+                    } else {
+                        data = [srcData[colIndex["PROCEDURE"]], srcData[colIndex["INVOCATIONS"]], srcData[colIndex["WEIGHTED_PERC"]], srcData[colIndex["MIN"]], srcData[colIndex["AVG"]], srcData[colIndex["MAX"]]];
+                    }
+                    procStats[srcData[colIndex["PROCEDURE"]]] = data;
+                    if (dataCount == connection.Metadata['@Statistics_PROCEDUREPROFILE_GRAPH_TRANSACTION'].data.length - 1) {
+                        sysTransaction["TimeStamp"] = srcData[colIndex["TIMESTAMP"]];
+                    }
+                    dataCount++;
+                });
             }
 
             var currentTimedTransactionCount = 0.0;
@@ -2643,6 +2108,35 @@ function alertNodeClicked(obj) {
             });
         };
 
+        var getTableDetails = function (connection, dTDetails) {
+            var colIndex = {};
+            var counter = 0;
+            if (connection.Metadata['@Statistics_TABLE'] == null) {
+                return;
+            }
+
+            connection.Metadata['@Statistics_TABLE'].schema.forEach(function (columnInfo) {
+                if (columnInfo["name"] == "HOST_ID" || columnInfo["name"] == "TABLE_NAME" || columnInfo["name"] == "TUPLE_COUNT" || columnInfo["name"] == "TABLE_TYPE" || columnInfo["name"] == "TUPLE_LIMIT" || columnInfo["name"] == "SEGMENT_COUNT" ||
+                    columnInfo["name"] == "FSYNC_INTERVAL" || columnInfo["name"] == "IN_USE_SEGMENT_COUNT")
+                    colIndex[columnInfo["name"]] = counter;
+                counter++;
+            });
+
+
+            connection.Metadata['@Statistics_TABLE'].data.forEach(function (info) {
+                var hostName = info[colIndex["HOST_ID"]];
+                if (!dTDetails.hasOwnProperty(hostName)) {
+                    dTDetails[hostName] = {};
+                }
+                dTDetails[hostName]["TABLE_NAME"] = info[colIndex["TABLE_NAME"]];
+                dTDetails[hostName]["TUPLE_COUNT"] = info[colIndex["TUPLE_COUNT"]];
+                dTDetails[hostName]["TABLE_TYPE"] = info[colIndex["TABLE_TYPE"]];
+                dTDetails[hostName]["TUPLE_LIMIT"] = info[colIndex["TUPLE_LIMIT"]];
+//                dTDetails[hostName]["FSYNC_INTERVAL"] = info[colIndex["FSYNC_INTERVAL"]];
+//                dTDetails[hostName]["IN_USE_SEGMENT_COUNT"] = info[colIndex["IN_USE_SEGMENT_COUNT"]];
+            });
+        };
+
         var getSnapshotStatus = function (connection, snapshotDetails) {
             var colIndex = {};
             var counter = 0;
@@ -2678,7 +2172,6 @@ function alertNodeClicked(obj) {
                 overviewValues['ZKINTERFACE'] == "" && overviewValues['DRINTERFACE'] == "") {
                 return false;
             }
-
             else if (overviewValues['ADMININTERFACE'] != "" || overviewValues['HTTPINTERFACE'] != ""
                 || overviewValues['CLIENTINTERFACE'] != "" || overviewValues['INTERNALINTERFACE'] != ""
                 || overviewValues['ZKINTERFACE'] != "" || overviewValues['DRINTERFACE'] != "") {
@@ -2729,14 +2222,11 @@ function alertNodeClicked(obj) {
                             }
                             count++;
                         }
-
                     });
 
                 } else {
                     serverDetails = new VoltDbAdminConfig.server(hostId, serverInfo['HOSTNAME'], serverInfo['CLUSTERSTATE'], serverInfo['IPADDRESS']);
-                    //VoltDbAdminConfig.servers.push(serverDetails);
                     VoltDbAdminConfig.servers[count] = serverDetails;
-
                 }
             };
 
@@ -2768,15 +2258,11 @@ function alertNodeClicked(obj) {
                             }
                             runningServerCounter++;
                         }
-
                     }
-
                 });
-
             };
             if (adminClusterObjects.ignoreServerListUpdateCount > 0) {
                 adminClusterObjects.ignoreServerListUpdateCount--;
-
             } else {
                 if (systemOverview != null || systemOverview != undefined) {
                     VoltDbAdminConfig.servers = [];
@@ -2789,7 +2275,6 @@ function alertNodeClicked(obj) {
                         setServerDetails(val.HOSTID, val, count);
                     });
                 }
-
             }
 
             if (VoltDbAdminConfig.servers != null || VoltDbAdminConfig.servers != undefined) {
@@ -2826,15 +2311,11 @@ function alertNodeClicked(obj) {
                             "<td align=\"right\"><a href=\"javascript:void(0);\" data-HostId=\"" + val.hostId + "\" data-HostName=\"" + val.serverName + "\" class=\"disableServer\"  id=\"stopServer_" + val.serverName + "\ onclick=\"VoltDbUI.openPopup(this);\">" +
                             "<span class=\"shutdownServer stopDisable\">Stop</span></a></td></tr>");
                     }
-
                 });
-
                 updateAdminServerList();
                 return htmlServerListHtml;
-
             }
             return "";
-
         };
 
         this.stopServer = function (nodeId, hostNameValue, onServerStopped) {
@@ -2864,11 +2345,63 @@ function alertNodeClicked(obj) {
             });
         };
 
-        this.shutdownCluster = function (onServerShutdown) {
+        this.shutdownCluster = function (onServerShutdown, zk_pause_txn_id) {
             VoltDBService.ShutdownClusterState(function (connection, status) {
                 if (status == 1) {
                     onServerShutdown(true);
                 }
+            }, zk_pause_txn_id);
+        };
+
+        this.prepareShutdownCluster = function (onPrepareServerShutdown) {
+            VoltDBService.PrepareShutdownCluster(function (connection) {
+                var prepare_status = {}
+                var status = -1;
+                var zk_pause_txn_id = '0'
+                var data = connection.Metadata['@PrepareShutdown_data']
+                if(data != undefined){
+                    zk_pause_txn_id = connection.Metadata['@PrepareShutdown_data']['data'][0][0]
+                    status = parseInt(connection.Metadata['@PrepareShutdown_status'])
+                }
+                prepare_status.zk_pause_txn_id = zk_pause_txn_id;
+                prepare_status.status = status;
+                onPrepareServerShutdown(prepare_status);
+            });
+        };
+
+        this.QuiesceCluster = function (onPrepareServerQuiesce) {
+            VoltDBService.QuiesceCluster(function (connection, status) {
+                    var data = connection.Metadata['@Quiesce_data']
+                    if(data == undefined)
+                        status = -1;
+                    else
+                        status = connection.Metadata['@Quiesce_data']['data'][0][0]
+                    onPrepareServerQuiesce(status);
+            });
+        };
+
+        this.GetDrProducerInformation = function (onInformationLoaded, drDetails) {
+            VoltDBService.GetDrProducerInformation(function (connection) {
+                getDrProducerInfo(connection, drDetails);
+                onInformationLoaded(drDetails);
+            });
+        };
+
+        this.GetExportTablesInformation = function (onInformationLoaded, tableDetails) {
+            VoltDBService.GetExportTablesInformation(function (connection) {
+                getExportTableInfo(connection, tableDetails);
+                onInformationLoaded(tableDetails);
+            });
+        };
+
+        this.GetImportRequestInformation = function (onInformationLoaded, tableDetails) {
+            VoltDBService.GetImportRequestInformation(function (connection) {
+                var data = connection.Metadata['@Statistics_IMPORTER']
+                if(data == undefined || $.isEmptyObject(data['data']))
+                    outstanding = 0;
+                else
+                    outstanding = connection.Metadata['@Statistics_IMPORTER']['data'][0][0]
+                onInformationLoaded(outstanding);
             });
         };
 
@@ -2907,13 +2440,11 @@ function alertNodeClicked(obj) {
             var counter = 0;
 
             if (connection.Metadata['@SnapshotScan_data'][0] == undefined) {
-
                 if (connection.Metadata['@SnapshotScan_status'] == -2) {
                     snapshotList[0] = {};
                     snapshotList[0]["RESULT"] = "FAILURE";
                     snapshotList[0]["ERR_MSG"] = connection.Metadata['@SnapshotScan_statusstring'] != null ? connection.Metadata['@SnapshotScan_statusstring'] : "";
                 }
-
                 return;
             }
 
@@ -2949,7 +2480,6 @@ function alertNodeClicked(obj) {
             if (saveStatus == -2) {
                 var currentServer = getCurrentServer();
                 snapshotStatus[currentServer] = {};
-
                 snapshotStatus[currentServer]["RESULT"] = "Failure";
                 snapshotStatus[currentServer]["ERR_MSG"] = connection.Metadata['@SnapshotSave_statusstring'] != undefined ? connection.Metadata['@SnapshotSave_statusstring'] : "";
 
@@ -3000,57 +2530,9 @@ function alertNodeClicked(obj) {
 
         this.getAdminconfiguration = function (onInformationLoaded) {
             VoltDBService.GetSystemInformationDeployment(function (connection) {
-                // this.getCommandLogStatus(connection, status);
-
                 onInformationLoaded(connection);
             });
         };
-
-
-        //var getCommandLogStatus = function (connection, status) {
-        //    var colIndex = {};
-        //    var colIndex2 = {};
-        //    var counter = 0;
-        //    var replicationRate1M = 0;
-        //    if (connection.Metadata['@SystemInformation_DEPLOYMENT'] == null) {
-        //        return;
-        //    }
-
-        //    connection.Metadata['@SystemInformation_DEPLOYMENT'].schema.forEach(function (columnInfo) {
-        //        //if (columnInfo["name"] == "HOSTNAME" || columnInfo["name"] == "TIMESTAMP" || columnInfo["name"] == "REPLICATION_RATE_1M" || columnInfo["name"] == "HOST_ID" || columnInfo["name"] == "STATE" || columnInfo["name"] == "REPLICATION_RATE_5M")
-        //        //    colIndex[columnInfo["name"]] = counter;
-        //        //counter++;
-        //    });
-
-        //    counter = 0;
-        //    connection.Metadata['@SystemInformation_DEPLOYMENT_completeData'][1].schema.forEach(function (columnInfo) {
-        //        //if (columnInfo["name"] == "HOSTNAME" || columnInfo["name"] == "TIMESTAMP" || columnInfo["name"] == 'IS_COVERED')
-        //        //    colIndex2[columnInfo["name"]] = counter;
-        //        //counter++;
-        //    });
-
-        //    connection.Metadata['@Statistics_DRCONSUMER'].data.forEach(function (info) {
-        //        //if (!replicationDetails.hasOwnProperty("DR_GRAPH")) {
-        //        //    replicationDetails["DR_GRAPH"] = {};
-        //        //    replicationDetails["DR_GRAPH"]["REPLICATION_DATA"] = [];
-        //        //}
-
-        //        //replicationRate1M += (info[colIndex["REPLICATION_RATE_1M"]] == null || info[colIndex["REPLICATION_RATE_1M"]] < 0) ? 0 : info[colIndex["REPLICATION_RATE_1M"]];
-
-        //        //var repData = {};
-        //        //repData["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
-        //        //replicationDetails["DR_GRAPH"]["TIMESTAMP"] = info[colIndex["TIMESTAMP"]];
-        //        //repData["HOST_ID"] = info[colIndex["HOST_ID"]];
-        //        //repData["STATE"] = info[colIndex["STATE"]];
-        //        //repData["REPLICATION_RATE_5M"] = info[colIndex["REPLICATION_RATE_5M"]] / 1000;
-        //        //repData["REPLICATION_RATE_1M"] = info[colIndex["REPLICATION_RATE_1M"]] / 1000;
-        //        //replicationDetails["DR_GRAPH"]["REPLICATION_DATA"].push(repData);
-
-        //    });
-
-        //    //replicationDetails["DR_GRAPH"]['WARNING_COUNT'] = getReplicationNotCovered(connection.Metadata['@Statistics_DRCONSUMER_completeData'][1], colIndex2['IS_COVERED']);
-        //    //replicationDetails["DR_GRAPH"]["REPLICATION_RATE_1M"] = replicationRate1M / 1000;
-        //};
 
         this.updateAdminConfiguration = function (updatedData, onInformationLoaded) {
             VoltDBService.UpdateAdminConfiguration(updatedData, function (connection) {
@@ -3065,7 +2547,6 @@ function alertNodeClicked(obj) {
         };
 
         //end admin configuration
-
         this.UpdateUserConfiguration = function (updatedData, onInformationLoaded, userId, requestType) {
             VoltDBService.UpdateUserConfiguration(updatedData, function (connection) {
                 var result = {};
@@ -3077,7 +2558,6 @@ function alertNodeClicked(obj) {
                 onInformationLoaded(result);
             }, userId, requestType);
         };
-
 
         function getTableData(connection, tablesData, viewsData, proceduresData, procedureColumnsData, sysProceduresData, processName, exportTableData) {
             exportTableData = exportTableData ==  undefined ? {} : exportTableData
@@ -3132,16 +2612,14 @@ function alertNodeClicked(obj) {
                     connection.Metadata['tables'][TableName].columns[rawColumns[i][16]] =
                         rawColumns[i][3].toUpperCase() +
                         ' (' + rawColumns[i][5].toLowerCase() + ')';
-                }
-                else if (connection.Metadata['exports'][TableName] != null) {
+                } else if (connection.Metadata['exports'][TableName] != null) {
                     if (connection.Metadata['exports'][TableName].columns == null) {
                         connection.Metadata['exports'][TableName].columns = [];
                     }
                     connection.Metadata['exports'][TableName].columns[rawColumns[i][16]] =
                         rawColumns[i][3].toUpperCase() +
                         ' (' + rawColumns[i][5].toLowerCase() + ')';
-                }
-                else if (connection.Metadata['views'][TableName] != null) {
+                } else if (connection.Metadata['views'][TableName] != null) {
                     if (connection.Metadata['views'][TableName].columns == null) {
                         connection.Metadata['views'][TableName].columns = [];
                     }
@@ -3168,7 +2646,6 @@ function alertNodeClicked(obj) {
                 for (var p = 0; p < procParams.length; ++p) {
                     connTypeParams[connTypeParams.length] = procParams[p].type;
                 }
-
                 // make the procedure callable.
                 connection.procedures[procName] = {};
                 connection.procedures[procName]['' + connTypeParams.length] = connTypeParams;
@@ -3198,22 +2675,6 @@ function alertNodeClicked(obj) {
             exportTableData['exportTables'] = connection.Metadata['exports']
         }
 
-
-        //common methods
-        var formatTableNoData = function (listName) {
-            if (listName == "PROCEDURE") {
-                lblPrevious.innerHTML = " ".concat(0, ' ');
-                lblTotalPages.innerHTML = " ".concat(0);
-                $('#storeProcedureBody').html("<tr><td colspan=6>No data to be displayed</td></tr>");
-
-            } else if (listName == "TABLE") {
-                lblPreviousTable.innerHTML = " ".concat(0, ' ');
-                lblTotalPagesofTables.innerHTML = " ".concat(0);
-                $('#tablesBody').html("<tr><td colspan=6>No data to be displayed</td></tr>");
-            }
-
-        };
-
         var formatTableData = function (connection) {
             var i = 0;
             var tableMetadata = [];
@@ -3224,231 +2685,62 @@ function alertNodeClicked(obj) {
             var partitionData = {};
             var averageRowCount = 0;
 
-            if (voltDbRenderer.refreshTables) {
-                if (connection.Metadata["@Statistics_TABLE"] != undefined || connection.Metadata["@Statistics_TABLE"] != null) {
-                    if (connection.Metadata["@Statistics_TABLE"].data != "" &&
-                        connection.Metadata["@Statistics_TABLE"].data != [] &&
-                        connection.Metadata["@Statistics_TABLE"].data != undefined) {
+            if (connection.Metadata["@Statistics_TABLE"] != undefined || connection.Metadata["@Statistics_TABLE"] != null) {
+                    tableMetadata = connection.Metadata["@Statistics_TABLE"].data;
+                    tableData = {};
 
-                        tableMetadata = connection.Metadata["@Statistics_TABLE"].data;
-                        tableData = {};
+                    $.each(tableMetadata, function (key, tupleData) {
+                        duplicatePartition = false;
+                        if (tupleData != undefined) {
+                            partitionEntryCount = 0;
 
-                        $.each(tableMetadata, function (key, tupleData) {
-                            duplicatePartition = false;
-                            if (tupleData != undefined) {
-                                partitionEntryCount = 0;
-
-                                if (!partitionData.hasOwnProperty(tupleData[tableNameIndex])) {
-                                    partitionData[tupleData[tableNameIndex]] = [];
-                                    partitionData[tupleData[tableNameIndex]].push(tupleData);
-
-                                } else {
-                                    $.each(partitionData[tupleData[tableNameIndex]], function (nestKey, nestData) {
-                                        for (i = 0; i < partitionData[tupleData[tableNameIndex]].length; i++) {
-                                            partitionEntryCount++;
-                                            //if partition is repeated for a given table in "partitionData"
-                                            if (tupleData[partitionIndex] == partitionData[tupleData[tableNameIndex]][i][partitionIndex]) {
-                                                duplicatePartition = true;
-                                                return false;
-                                            }
-
-                                        }
-                                        if (partitionEntryCount == partitionData[tupleData[tableNameIndex]].length && !duplicatePartition) {
-                                            partitionData[tupleData[tableNameIndex]].push(tupleData);
+                            if (!partitionData.hasOwnProperty(tupleData[tableNameIndex])) {
+                                partitionData[tupleData[tableNameIndex]] = [];
+                                partitionData[tupleData[tableNameIndex]].push(tupleData);
+                            } else {
+                                $.each(partitionData[tupleData[tableNameIndex]], function (nestKey, nestData) {
+                                    for (i = 0; i < partitionData[tupleData[tableNameIndex]].length; i++) {
+                                        partitionEntryCount++;
+                                        //if partition is repeated for a given table in "partitionData"
+                                        if (tupleData[partitionIndex] == partitionData[tupleData[tableNameIndex]][i][partitionIndex]) {
+                                            duplicatePartition = true;
                                             return false;
-
                                         }
-                                    });
-                                }
+                                    }
+                                    if (partitionEntryCount == partitionData[tupleData[tableNameIndex]].length && !duplicatePartition) {
+                                        partitionData[tupleData[tableNameIndex]].push(tupleData);
+                                        return false;
+
+                                    }
+                                });
                             }
-                        });
+                        }
+                    });
 
-                        //formulate max, min, average for each table
-                        $.each(partitionData, function (key, data) {
-                            totalTupleCount = 0;
+                    //formulate max, min, average for each table
+                    $.each(partitionData, function (key, data) {
+                        totalTupleCount = 0;
 
-                            if (!tableData.hasOwnProperty(key)) {
-                                tableData[key] = {};
-                            }
+                        if (!tableData.hasOwnProperty(key)) {
+                            tableData[key] = {};
+                        }
 
-                            for (i = 0; i < data.length; i++) {
-                                totalTupleCount += parseInt(data[i][tupleCountIndex]);
-                                tupleCountPartitions[i] = data[i][tupleCountIndex];
-                            }
+                        for (i = 0; i < data.length; i++) {
+                            totalTupleCount += parseInt(data[i][tupleCountIndex]);
+                            tupleCountPartitions[i] = data[i][tupleCountIndex];
+                        }
 
-
-                            tableData[key] = {
-                                "TABLE_NAME": key,
-                                "MAX_ROWS": Math.max.apply(null, tupleCountPartitions),
-                                "MIN_ROWS": Math.min.apply(null, tupleCountPartitions),
-                                "AVG_ROWS": getAverage(tupleCountPartitions),
-                                "TUPLE_COUNT": schemaCatalogTableTypes[key].REMARKS == "REPLICATED" ? data[0][tupleCountIndex] : totalTupleCount,
-                                "TABLE_TYPE": schemaCatalogTableTypes[key].REMARKS,
-                                "drEnabled": schemaCatalogTableTypes[key].drEnabled,
-                                "TABLE_TYPE1": schemaCatalogTableTypes[key].TABLE_TYPE
-                            };
-
-                        });
-                    }
-                    else {
-                        formatTableNoData("TABLE");
-
-                    }
-
-                }
-            }
-
-        };
-
-        var mapJsonArrayToProcedures = function () {
-            var i = 0;
-            var procedureName;
-            procedureData = [];
-            var procedure = {};
-
-            if (procedureJsonArray != undefined) {
-                for (i = 0; i < procedureJsonArray.length; i++) {
-                    procedureName = procedureJsonArray[i].PROCEDURE;
-                    if (!procedureData.hasOwnProperty(procedureName)) {
-                        procedure = {
-                            'PROCEDURE': procedureJsonArray[i].PROCEDURE,
-                            'INVOCATIONS': procedureJsonArray[i].INVOCATIONS,
-                            'MIN_LATENCY': procedureJsonArray[i].MIN_LATENCY,
-                            'MAX_LATENCY': procedureJsonArray[i].MAX_LATENCY,
-                            'AVG_LATENCY': procedureJsonArray[i].AVG_LATENCY,
-                            'PERC_EXECUTION': procedureJsonArray[i].PERC_EXECUTION
+                        tableData[key] = {
+                            "TABLE_NAME": key,
+                            "MAX_ROWS": Math.max.apply(null, tupleCountPartitions),
+                            "MIN_ROWS": Math.min.apply(null, tupleCountPartitions),
+                            "AVG_ROWS": getAverage(tupleCountPartitions),
+                            "TUPLE_COUNT": schemaCatalogTableTypes[key].REMARKS == "REPLICATED" ? data[0][tupleCountIndex] : totalTupleCount,
+                            "TABLE_TYPE": schemaCatalogTableTypes[key].REMARKS,
+                            "drEnabled": schemaCatalogTableTypes[key].drEnabled,
+                            "TABLE_TYPE1": schemaCatalogTableTypes[key].TABLE_TYPE
                         };
-                        procedureData.push(procedure);
-                    }
-                }
-            }
-
-        };
-
-        var mapJsonArrayToSearchedProcedures = function () {
-            var i = 0;
-            var procedureName;
-            lSearchData['procedures'] = [];
-            var searchTuple = {};
-
-            if (procedureSearchJsonArray != undefined) {
-                for (i = 0; i < procedureSearchJsonArray.length; i++) {
-                    procedureName = procedureSearchJsonArray[i].PROCEDURE;
-                    if (!lSearchData.hasOwnProperty(procedureName)) {
-                        searchTuple = {};
-                        searchTuple['PROCEDURE'] = procedureSearchJsonArray[i].PROCEDURE;
-                        searchTuple['INVOCATIONS'] = procedureSearchJsonArray[i].INVOCATIONS;
-                        searchTuple['MIN_LATENCY'] = procedureSearchJsonArray[i].MIN_LATENCY;
-                        searchTuple['MAX_LATENCY'] = procedureSearchJsonArray[i].MAX_LATENCY;
-                        searchTuple['AVG_LATENCY'] = procedureSearchJsonArray[i].AVG_LATENCY;
-                        searchTuple['PERC_EXECUTION'] = procedureSearchJsonArray[i].PERC_EXECUTION;
-
-                        lSearchData['procedures'].push(searchTuple);
-
-                    }
-                }
-            }
-        };
-
-        var setProcedureTupleHtml = function (val) {
-            if (!$.isEmptyObject(val)) {
-                if (htmlMarkup == "") {
-                    htmlMarkup = "<tr><td>" + val['PROCEDURE'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['INVOCATIONS'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['MIN_LATENCY'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['MAX_LATENCY'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['AVG_LATENCY'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['PERC_EXECUTION'] + "</td></tr>";
-
-                } else {
-
-                    htmlMarkup += "<tr><td>" + val['PROCEDURE'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['INVOCATIONS'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['MIN_LATENCY'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['MAX_LATENCY'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['AVG_LATENCY'] + "</td>" +
-                        "<td class=\"txt-center\">" + val['PERC_EXECUTION'] + "</td></tr>";
-                }
-            }
-        };
-
-        var mapJsonArrayToTables = function () {
-            var i = 0;
-            var tableName = "";
-            tableData = {};
-            if (tableJsonArray != undefined) {
-                for (i = 0; i < tableJsonArray.length; i++) {
-                    if (i > 0) {
-                        if (tableJsonArray[i].TABLE_NAME != tableJsonArray[i - 1].TABLE_NAME) {
-                            tableName = tableJsonArray[i].TABLE_NAME;
-                        }
-                    }
-                    if (!tableData.hasOwnProperty(tableName)) {
-                        tableName = tableJsonArray[i].TABLE_NAME;
-                        tableData[tableName] = {};
-                    }
-
-                    tableData[tableName] = {
-                        "TABLE_NAME": tableName,
-                        "MAX_ROWS": tableJsonArray[i].MAX_ROWS,
-                        "MIN_ROWS": tableJsonArray[i].MIN_ROWS,
-                        "AVG_ROWS": tableJsonArray[i].AVG_ROWS,
-                        "TUPLE_COUNT": tableJsonArray[i].TUPLE_COUNT,
-                        "TABLE_TYPE": tableJsonArray[i].TABLE_TYPE
-                    };
-                }
-            }
-
-        };
-
-        var mapJsonArrayToSearchedTables = function () {
-            var i = 0;
-            var counter = 0;
-            var tableName = "";
-            lSearchData.tables = {};
-
-            if (tableSearchJsonArray != undefined) {
-                for (i = 0; i < tableSearchJsonArray.length; i++) {
-                    if (i > 0) {
-                        if (tableSearchJsonArray[i].TABLE_NAME != tableSearchJsonArray[i - 1].TABLE_NAME) {
-                            tableName = tableSearchJsonArray[i].TABLE_NAME;
-                        }
-                    }
-                    if (!lSearchData.tables.hasOwnProperty(tableName)) {
-                        tableName = tableSearchJsonArray[i].TABLE_NAME;
-                        lSearchData.tables[tableName] = {};
-                        counter = 0;
-                    }
-
-                    lSearchData.tables[tableName] = {
-                        "TABLE_NAME": tableName,
-                        "MAX_ROWS": tableSearchJsonArray[i].MAX_ROWS,
-                        "MIN_ROWS": tableSearchJsonArray[i].MIN_ROWS,
-                        "AVG_ROWS": tableSearchJsonArray[i].AVG_ROWS,
-                        "TUPLE_COUNT": tableSearchJsonArray[i].TUPLE_COUNT,
-                        "TABLE_TYPE": tableSearchJsonArray[i].TABLE_TYPE
-                    };
-                    counter++;
-
-                }
-            }
-        };
-
-        var setTableTupleDataHtml = function (tuple, tableName) {
-            if (htmlTableMarkup == undefined || htmlTableMarkup == "") {
-                htmlTableMarkup = "<tr><td>" + tableName + "</td>" +
-                         "<td class=\"txt-center\">" + tuple['TUPLE_COUNT'] + "</td>" +
-                         "<td class=\"txt-center\">" + tuple['MAX_ROWS'] + "</td>" +
-                         "<td class=\"txt-center\">" + tuple['MIN_ROWS'] + "</td>" +
-                         "<td class=\"txt-center\">" + tuple['AVG_ROWS'] + "</td>" +
-                         "<td class=\"txt-center\">" + tuple['TABLE_TYPE'] + "</td></tr>";
-            } else {
-                htmlTableMarkup += "<tr><td>" + tableName + "</td>" +
-                        "<td class=\"txt-center\">" + tuple['TUPLE_COUNT'] + "</td>" +
-                        "<td class=\"txt-center\">" + tuple['MAX_ROWS'] + "</td>" +
-                        "<td class=\"txt-center\">" + tuple['MIN_ROWS'] + "</td>" +
-                       "<td class=\"txt-center\">" + tuple['AVG_ROWS'] + "</td>" +
-                       "<td class=\"txt-center\">" + tuple['TABLE_TYPE'] + "</td></tr>";
+                    });
             }
         };
 
@@ -3462,207 +2754,12 @@ function alertNodeClicked(obj) {
                 }
                 average = Math.round(dataSum / arrayData.length, 2);
                 return average;
-
             }
             return 0;
         };
 
-        var ascendingSortJSON = function (data, key) {
-            return data.sort(function (a, b) {
-                var x = a[key]; var y = b[key];
-                return ((x < y) ? -1 : ((x > y) ? 1 : 0));
-            });
-        };
-
-        var descendingSortJSON = function (data, key) {
-            return data.sort(function (a, b) {
-                var x = a[key]; var y = b[key];
-                return ((x > y) ? -1 : ((x < y) ? 1 : 0));
-            });
-        };
-
-        var checkIfDuplicateJson = function (jsonArray, keyValue) {
-            var i = 0;
-            var isDuplicate = false;
-            for (i = 0; i < jsonArray.length; i++) {
-                if (jsonArray[i].PROCEDURE == keyValue) {
-                    isDuplicate = true;
-                    break;
-
-                }
-            }
-            return isDuplicate;
-        };
-
-        var checkSortColumnSortable = function () {
-            var isSearchable = 0;
-            if (voltDbRenderer.isSortProcedures) {
-                if (voltDbRenderer.sortColumn == "TABLE_NAME")
-                    isSearchable = true;
-
-                else
-                    isSearchable = false;
-
-            }
-            else if (voltDbRenderer.isSortTables) {
-                if (voltDbRenderer.tableSortColumn == "TABLE_NAME")
-                    isSearchable = true;
-
-                else
-                    isSearchable = false;
-            }
-
-            return isSearchable;
-        };
-
-        var getColumnTypes = function (tableName) {
-            var columnType = "";
-            $.each(schemaCatalogColumnTypes, function (key, typeVal) {
-                if (tableName == typeVal['TABLE_NAME']) {
-                    columnType = typeVal['REMARKS'];
-                    return false;
-                }
-            });
-
-            if (columnType == "PARTITION_COLUMN") {
-                return columnType;
-            } else {
-                return columnType;
-            }
-
-        };
-
-        //Search methods
-        var lSearchData = this.searchData;
-        this.searchProcedures = function (searchType, searchKey, onProcedureSearched) {
-            var searchDataCount = 0;
-
-            if (procedureData == null || procedureData == undefined) {
-                return;
-            }
-
-            lSearchData['procedures'] = [];
-            $.each(procedureData, function (nestKey, tupleData) {
-                if (tupleData != undefined) {
-                    if (tupleData.PROCEDURE.toLowerCase().indexOf(searchKey.toLowerCase()) >= 0) {
-                        lSearchData['procedures'][searchDataCount] = tupleData;
-                        searchDataCount++;
-
-                    }
-
-                }
-            });
-
-            this.procedureSearchDataSize = searchDataCount;
-            onProcedureSearched(searchDataCount > 0);
-
-        };
-
-        this.searchTables = function (connection, searchKey, onTablesSearched) {
-            var searchDataCount = 0;
-
-            if (tableData == null || tableData == undefined) {
-                return;
-            }
-            lSearchData.tables = {};
-
-            $.each(tableData, function (nestKey, tupleData) {
-                if (tupleData != undefined) {
-                    if (nestKey.toLowerCase().indexOf(searchKey.toLowerCase()) >= 0) {
-                        lSearchData.tables[nestKey] = tupleData;
-                        searchDataCount++;
-
-                    }
-                }
-            });
-
-            if (searchDataCount == 0)
-                lSearchData.tables = {};
-
-            this.tableSearchDataSize = searchDataCount;
-            onTablesSearched(searchDataCount > 0);
-        };
-
-        this.formatSearchDataToJsonArray = function (isSearched) {
-            var searchProcedureCount = 0;
-            procedureSearchJsonArray = [];
-
-            function iterateSearchProcedureData() {
-                $.each(lSearchData.procedures, function (key, data) {
-                    minLatency = data.MIN_LATENCY * Math.pow(10, -6);
-                    maxLatency = data.MAX_LATENCY * Math.pow(10, -6);
-                    avgLatency = data.AVG_LATENCY * Math.pow(10, -6);
-
-                    minLatency = parseFloat(minLatency.toFixed(2));
-                    maxLatency = parseFloat(maxLatency.toFixed(2));
-                    avgLatency = parseFloat(avgLatency.toFixed(2));
-
-                    procedureSearchJsonArray[searchProcedureCount] = {
-                        "PROCEDURE": data.PROCEDURE,
-                        "INVOCATIONS": data.INVOCATIONS,
-                        "MIN_LATENCY": data.MIN_LATENCY,
-                        "MAX_LATENCY": data.MAX_LATENCY,
-                        "AVG_LATENCY": data.AVG_LATENCY,
-                        "PERC_EXECUTION": data.PERC_EXECUTION
-                    };
-
-                    searchProcedureCount++;
-                });
-            }
-
-            if (isSearched) {
-                if (lSearchData.procedures != "" || lSearchData.procedures != undefined) {
-                    iterateSearchProcedureData();
-                }
-
-            } else {
-                voltDbRenderer.searchProcedures(connection, $('#filterStoredProc')[0].value, function (searchResult) {
-                    iterateSearchProcedureData();
-                });
-            }
-        };
-
-        this.formatSearchTablesDataToJsonArray = function (connection, searchKey, isSearched) {
-            var searchTableCount = 0;
-            tableSearchJsonArray = [];
-
-            function iterateSearchTableData() {
-                $.each(lSearchData.tables, function (nestKey, tupleData) {
-                    if (tupleData != undefined) {
-                        if (nestKey.toLowerCase().indexOf(searchKey.toLowerCase()) >= 0) {
-                            tableSearchJsonArray[searchTableCount] = {
-                                "TABLE_NAME": nestKey,
-                                "MAX_ROWS": tupleData["MAX_ROWS"],
-                                "MIN_ROWS": tupleData["MIN_ROWS"],
-                                "AVG_ROWS": tupleData["AVG_ROWS"],
-                                "TUPLE_COUNT": tupleData["TUPLE_COUNT"],
-                                "TABLE_TYPE": schemaCatalogTableTypes[nestKey].REMARKS //getColumnTypes(nestKey) == "PARTITION_COLUMN" ? "PARTITIONED" : schemaCatalogTableTypes[nestKey].TABLE_TYPE
-                            };
-                            searchTableCount++;
-
-                        }
-                    }
-
-                });
-            }
-
-            if (isSearched) {
-                if (lSearchData.tables != "" || lSearchData.tables != undefined) {
-                    iterateSearchTableData();
-                }
-
-            } else {
-                voltDbRenderer.searchTables(connection, $('#filterDatabaseTable')[0].value, function (searchResult) {
-                    if (searchResult) {
-                        iterateSearchTableData();
-                    }
-
-                });
-            }
-
-        };
-
     });
+
     window.voltDbRenderer = voltDbRenderer = new iVoltDbRenderer();
 
 })(window);
@@ -3688,6 +2785,5 @@ $(window).resize(function () {
     } else if (windowWidth < 699) {
         $("#nav").css('display', 'none');
     }
-
 });
 

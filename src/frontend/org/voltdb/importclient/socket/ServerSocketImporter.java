@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.Socket;
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -87,7 +88,7 @@ public class ServerSocketImporter extends AbstractImporter {
                 ch.start();
             }
         } catch(IOException e) {
-           error(e, "Unexpected error accepting client connections for " + getName() + " on port " + m_config.getPort());
+           warn(e, "Unexpected error accepting client connections for " + getName() + " on port " + m_config.getPort());
         }
     }
 
@@ -109,13 +110,15 @@ public class ServerSocketImporter extends AbstractImporter {
             try {
                 BufferedReader in = new BufferedReader(
                         new InputStreamReader(m_clientSocket.getInputStream()));
-                Formatter<String> formatter = (Formatter<String>) m_config.getFormatterBuilder().create();
+                Formatter formatter = m_config.getFormatterBuilder().create();
+                Object params[] = null;
                 while (shouldRun()) {
                     String line = in.readLine();
-                    //You should convert your data to params here.
-                    if (line == null) continue;
                     try{
-                        Invocation invocation = new Invocation(m_procedure, formatter.transform(line));
+                        params = formatter.transform(ByteBuffer.wrap(line.getBytes()));
+                        //You should convert your data to params here.
+                        if (params == null) continue;
+                        Invocation invocation = new Invocation(m_procedure, params);
                         if (!callProcedure(invocation)) {
                             rateLimitedLog(Level.ERROR, null, "Socket importer insertion failed");
                         }

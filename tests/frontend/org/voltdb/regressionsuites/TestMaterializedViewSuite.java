@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -24,6 +24,7 @@
 package org.voltdb.regressionsuites;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -38,6 +39,7 @@ import org.voltdb.client.ClientResponse;
 import org.voltdb.client.NoConnectionsException;
 import org.voltdb.client.ProcCallException;
 import org.voltdb.compiler.VoltProjectBuilder;
+import org.voltdb.types.TimestampType;
 import org.voltdb_testprocs.regressionsuites.matviewprocs.AddPerson;
 import org.voltdb_testprocs.regressionsuites.matviewprocs.AddThing;
 import org.voltdb_testprocs.regressionsuites.matviewprocs.AggAges;
@@ -47,12 +49,13 @@ import org.voltdb_testprocs.regressionsuites.matviewprocs.Eng798Insert;
 import org.voltdb_testprocs.regressionsuites.matviewprocs.OverflowTest;
 import org.voltdb_testprocs.regressionsuites.matviewprocs.SelectAllPeople;
 import org.voltdb_testprocs.regressionsuites.matviewprocs.TruncateMatViewDataMP;
+import org.voltdb_testprocs.regressionsuites.matviewprocs.TruncatePeople;
+import org.voltdb_testprocs.regressionsuites.matviewprocs.TruncateTables;
 import org.voltdb_testprocs.regressionsuites.matviewprocs.UpdatePerson;
 
 import com.google_voltpatches.common.collect.Lists;
 
 import junit.framework.Test;
-
 
 public class TestMaterializedViewSuite extends RegressionSuite {
 
@@ -61,11 +64,15 @@ public class TestMaterializedViewSuite extends RegressionSuite {
     private static final int SABOTAGE = 2;
     private static final int NORMALLY = 0;
 
+    private static final int[] yesAndNo = new int[]{1, 0};
+    private static final int[] never = new int[]{0};
+
     // procedures used by these tests
     static final Class<?>[] PROCEDURES = {
         AddPerson.class, DeletePerson.class, UpdatePerson.class, AggAges.class,
         SelectAllPeople.class, AggThings.class, AddThing.class, OverflowTest.class,
-        Eng798Insert.class, TruncateMatViewDataMP.class
+        Eng798Insert.class, TruncateMatViewDataMP.class,
+        TruncateTables.class, TruncatePeople.class
     };
 
     // For comparing tables with FLOAT columns
@@ -93,9 +100,15 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         int nStatement = 0;
         for (VoltTable countTable : results) {
             ++nStatement;
-            long count = countTable.asScalarLong();
-            assertEquals("COUNT statement " + nStatement + "/" +
-            results.length + " should have found no undeleted rows.", 0, count);
+            try {
+                long count = countTable.asScalarLong();
+                assertEquals("COUNT statement " + nStatement + "/" +
+                results.length + " should have found no undeleted rows.", 0, count);
+            }
+            catch (Exception exc) {
+                System.out.println("validation query " + nStatement + " got a bad result: " + exc);
+                throw exc;
+            }
         }
     }
 
@@ -319,8 +332,7 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         results = client.callProcedure("AggAges", 1).getResults();
         assertEquals(1, results.length);
         assertEquals(2, results[0].getRowCount());
-
-}
+    }
 
     private void subtestDeleteSinglePartition() throws IOException, ProcCallException
     {
@@ -1381,12 +1393,67 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         results = client.callProcedure("DeletePerson", 1, 1L, NORMALLY).getResults();
         results = client.callProcedure("DeletePerson", 2, 5L, NORMALLY).getResults();
 
-        results = client.callProcedure("@AdHoc", "SELECT * FROM MATPEOPLE2").getResults();
+        validateHardCodedStatusQuo(client);
+
+        System.out.println("Testing single-source-table truncates");
+
+        // Make sure the stored proc behaves correctly even if we
+        // purposely abort it.
+        // forceAbort = 1 for "yes" is the more interesting case.
+        for (int forceAbort : yesAndNo) {
+            // Try one or more truncates on the same view source table
+            // within the stored proc.
+            for (int repeats = 1; repeats <= 3; ++repeats) {
+                // For a given number of truncates, vary the number of
+                // times we repopulate the data before the next truncate.
+                // We always repopulate after the last truncate so the
+                // final state of the database does not depend on a commit.
+
+                // Different views (with a group by) MAY depend on
+                // re-population to repro the issue.
+                // Views without a GROUP BY maintain
+                // an empty result row with count = 0,
+                // which seems to be enough to trigger the problem.
+                for (int restores = 1; restores < repeats; ++restores) {
+                    try {
+                        try {
+                            results = client.callProcedure("TruncatePeople",
+                                    forceAbort, repeats, restores).getResults();
+                            assertEquals("TruncatePeople was expected to roll back", 0, forceAbort);
+                        }
+                        catch (ProcCallException vae) {
+                            if ( ! vae.getMessage().contains("Rolling back as requested")) {
+                                throw vae;
+                            }
+                            assertEquals("TruncatePeople was not requested to roll back", 1, forceAbort);
+                        }
+                    }
+                    catch (Exception other) {
+                        fail("The call to TruncatePeople unexpectedly threw: " + other);
+                    }
+                    //* enable to debug */  System.out.println("SURVIVED TruncatePeople." + repeats + "." + restores);
+                    validateHardCodedStatusQuo(client);
+                }
+            }
+        }
+    }
+
+    /**
+     * @param client
+     * @throws ProcCallException
+     * @throws IOException
+     * @throws NoConnectionsException
+     */
+    private void validateHardCodedStatusQuo(Client client)
+            throws NoConnectionsException, IOException, ProcCallException {
+        VoltTable[] results = client.callProcedure("@AdHoc",
+                "SELECT * FROM MATPEOPLE2").getResults();
         assert(results != null);
         assertEquals(1, results.length);
+        VoltTable t;
         t = results[0];
         assertEquals(2, t.getRowCount());
-        System.out.println(t.toString());
+        //* enable to debug */  System.out.println(t);
         t.advanceRow();
         assertEquals(2, t.getLong(2));
         assertEquals(0, (int)(t.getDouble(3)));
@@ -1395,13 +1462,20 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         assertEquals(2, t.getLong(2));
         assertEquals(0, (int)(t.getDouble(3)));
         assertEquals(10, t.getLong(4));
-
     }
 
     private void insertRow(Client client, Object... parameters) throws IOException, ProcCallException
     {
         VoltTable[] results = null;
         results = client.callProcedure(parameters[0].toString() + ".insert", Arrays.copyOfRange(parameters, 1, parameters.length)).getResults();
+        assertEquals(1, results.length);
+        assertEquals(1L, results[0].asScalarLong());
+    }
+
+    private void insertRowAdHoc(Client client, String stmt) throws IOException, ProcCallException
+    {
+        VoltTable[] results = null;
+        results = client.callProcedure("@AdHoc", stmt).getResults();
         assertEquals(1, results.length);
         assertEquals(1L, results[0].asScalarLong());
     }
@@ -1463,7 +1537,6 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         assertTablesAreEqual(prefix + "QTYPERPRODUCT: ", tresult, vresult, EPSILON);
     }
 
-    // This test disabled pending fix for
     public void testViewOnJoinQuery() throws IOException, ProcCallException
     {
         Client client = getClient();
@@ -1548,7 +1621,7 @@ public class TestMaterializedViewSuite extends RegressionSuite {
 
         // -- 1 -- Test updating the data in the source tables.
         // There are two lists of data, we first insert the data in the first list
-        // to the corresponding source tables, then update each row with the data
+        // into the corresponding source tables, then update each row with the data
         // from the second data list.
         System.out.println("Now testing updating the join query view source table.");
         for (int i=0; i<dataList1.size(); i++) {
@@ -1559,16 +1632,17 @@ public class TestMaterializedViewSuite extends RegressionSuite {
             updateRow(client, dataList1.get(i), dataList2.get(i));
             verifyViewOnJoinQueryResult(client);
         }
-        truncateBeforeTest(client);
-
-        // Merge two sub-lists for the following tests.
-        dataList1.addAll(dataList2);
 
         // -- 2 -- Test inserting the data into the source tables.
         // We do a shuffle here and in the delete test. But I do believe we still
         // have the full coverage of all the cases because we are inserting and deleting
         // all the rows. The cases updating values of all kinds of aggregations will be
         // tested in one row or another.
+        truncateBeforeTest(client);
+        // Merge two sub-lists for the following tests.
+        dataList1.addAll(dataList2);
+        // For more deterministic debugging, consider this instead of shuffle:
+        // Collections.reverse(dataList1);
         Collections.shuffle(dataList1);
         System.out.println("Now testing inserting data to the join query view source table.");
         for (int i=0; i<dataList1.size(); i++) {
@@ -1585,7 +1659,9 @@ public class TestMaterializedViewSuite extends RegressionSuite {
             System.out.println("Now testing altering the source table of a view.");
             // 3.1 add column
             try {
-                client.callProcedure("@AdHoc", "ALTER TABLE ORDERITEMS ADD COLUMN x FLOAT;");
+                client.callProcedure("@AdHoc",
+                        "ALTER TABLE ORDERITEMS ADD COLUMN x FLOAT;" +
+                        "ALTER TABLE WAS_ORDERITEMS ADD COLUMN x FLOAT;");
             } catch (ProcCallException pce) {
                 pce.printStackTrace();
                 fail("Should be able to add column to a view source table.");
@@ -1593,7 +1669,9 @@ public class TestMaterializedViewSuite extends RegressionSuite {
             verifyViewOnJoinQueryResult(client);
             // 3.2 drop column
             try {
-                client.callProcedure("@AdHoc", "ALTER TABLE ORDERITEMS DROP COLUMN x;");
+                client.callProcedure("@AdHoc",
+                        "ALTER TABLE ORDERITEMS DROP COLUMN x;" +
+                        "ALTER TABLE WAS_ORDERITEMS DROP COLUMN x;");
             } catch (ProcCallException pce) {
                 pce.printStackTrace();
                 fail("Should be able to drop column on a view source table.");
@@ -1601,7 +1679,9 @@ public class TestMaterializedViewSuite extends RegressionSuite {
             verifyViewOnJoinQueryResult(client);
             // 3.3 alter column
             try {
-                client.callProcedure("@AdHoc", "ALTER TABLE CUSTOMERS ALTER COLUMN ADDRESS VARCHAR(100);");
+                client.callProcedure("@AdHoc",
+                        "ALTER TABLE CUSTOMERS ALTER COLUMN ADDRESS VARCHAR(100);" +
+                        "ALTER TABLE WAS_CUSTOMERS ALTER COLUMN ADDRESS VARCHAR(100);");
             } catch (ProcCallException pce) {
                 pce.printStackTrace();
                 fail("Should be able to alter column in a view source table.");
@@ -1610,6 +1690,7 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         }
 
         // -- 4 -- Test defining view after the data is loaded.
+        //         The test is crafted to include only safe operations.
         if (! isHSQL()) {
             System.out.println("Now testing view data catching-up.");
             try {
@@ -1620,15 +1701,13 @@ public class TestMaterializedViewSuite extends RegressionSuite {
             }
             try {
                 client.callProcedure("@AdHoc",
-                    "CREATE VIEW ORDER_DETAIL_WITHPCOL (NAME, ORDER_ID, CNT, SUMAMT, MINUNIT, MAXUNIT, ITEMCOUNT) AS " +
+                    "CREATE VIEW ORDER_DETAIL_WITHPCOL (NAME, ORDER_ID, CNT, MINUNIT, MAXUNIT) AS " +
                     "SELECT " +
                         "CUSTOMERS.NAME, " +
                         "ORDERS.ORDER_ID, " +
                         "COUNT(*), " +
-                        "SUM(PRODUCTS.PRICE * ORDERITEMS.QTY), " +
                         "MIN(PRODUCTS.PRICE), " +
-                        "MAX(PRODUCTS.PRICE), " +
-                        "COUNT(ORDERITEMS.PID) " +
+                        "MAX(PRODUCTS.PRICE) " +
                     "FROM CUSTOMERS JOIN ORDERS ON CUSTOMERS.CUSTOMER_ID = ORDERS.CUSTOMER_ID " +
                                    "JOIN ORDERITEMS ON ORDERS.ORDER_ID = ORDERITEMS.ORDER_ID " +
                                    "JOIN PRODUCTS ON ORDERITEMS.PID = PRODUCTS.PID " +
@@ -1640,14 +1719,114 @@ public class TestMaterializedViewSuite extends RegressionSuite {
             verifyViewOnJoinQueryResult(client);
         }
 
-        // -- 5 -- Test deleting the data from the source tables.
+        // -- 5 -- Test truncating one or more tables,
+        // then explicitly restoring their content.
+        System.out.println("Now testing truncating the join query view source table.");
+        // Temporarily substitute never for yesAndNo on the next line if you
+        // want to bypass testing of rollback after truncate.
+        for (int forceRollback : /*default:*/ yesAndNo) { //alt:*/ never) {
+            for (int truncateTable1 : yesAndNo) {
+                // Each use of 'never' reduces by half the tried
+                // combinations of truncate operations.
+                for (int truncateTable2 : /*default:*/ yesAndNo) { //alt:*/ never) {
+                    // Substitute yesAndNo below for test overkill
+                    for (int truncateTable3 : /**/ never) { //*/ yesAndNo) {
+                        for (int truncateTable4 : /**/ never) { //*/ yesAndNo) {
+                            // truncateSourceTable verifies the short-term effects
+                            // of truncation and restoration within the transaction.
+                            truncateSourceTables(client, forceRollback,
+                                    truncateTable1,
+                                    truncateTable2,
+                                    truncateTable3,
+                                    truncateTable4);
+                            // Verify the correctness outside the transaction.
+                            verifyViewOnJoinQueryResult(client);
+                        }
+                    }
+                }
+            }
+        }
 
+        // -- 6 -- Test deleting the data from the source tables.
+        // For more deterministic debugging, consider this instead of shuffle:
+        // Collections.reverse(dataList1);
         Collections.shuffle(dataList1);
         System.out.println("Now testing deleting data from the join query view source table.");
-        for (int i=0; i<dataList1.size(); i++) {
+        for (int i = 0; i < dataList1.size(); i++) {
             deleteRow(client, dataList1.get(i));
             verifyViewOnJoinQueryResult(client);
         }
+
+        // Restore catalog changes:
+        try {
+            client.callProcedure("@AdHoc",
+                    "TRUNCATE TABLE CUSTOMERS;" +
+                    "TRUNCATE TABLE WAS_CUSTOMERS;");
+            client.callProcedure("@AdHoc",
+                    "ALTER TABLE CUSTOMERS ALTER COLUMN ADDRESS VARCHAR(50);" +
+                    "ALTER TABLE WAS_CUSTOMERS ALTER COLUMN ADDRESS VARCHAR(50);");
+        } catch (ProcCallException pce) {
+            pce.printStackTrace();
+            fail("Should be able to alter column in a view source table.");
+        }
+        verifyViewOnJoinQueryResult(client);
+    }
+
+    private void truncateSourceTables(Client client, int rollback,
+            int truncateTable1, int truncateTable2, int truncateTable3,
+            int truncateTable4)
+    {
+        try {
+            try {
+                VoltTable vt = client.callProcedure("TruncateTables", rollback,
+                        truncateTable1,
+                        truncateTable2,
+                        truncateTable3,
+                        truncateTable4).getResults()[0];
+                assertEquals("TruncateTables was expected to roll back", 0, rollback);
+                String result = " UNEXPECTED EMPTY RETURN FROM TruncateTables ";
+                if (vt.advanceRow()) {
+                    result = vt.getString(0);
+                }
+                if ( ! "".equals(result)) {
+                    fail("TruncateTables detected an unexpected difference: " + result);
+                }
+            }
+            catch (ProcCallException vae) {
+                if ( ! vae.getMessage().contains("Rolling back as requested")) {
+                    throw vae;
+                }
+                assertEquals("TruncateTables was not requested to roll back", 1, rollback);
+            }
+        }
+        catch (Exception other) {
+            fail("The call to TruncateTables unexpectedly threw: " + other);
+        }
+    }
+
+    public void testViewOnGeoJoin() throws Exception {
+        if (isHSQL()) {
+            return;
+        }
+        Client client = getClient();
+        String[] inserts = {
+            "INSERT INTO REGIONS VALUES (1, POLYGONFROMTEXT('POLYGON((116.223593 39.993320, 116.210284 39.913219, 116.314654 39.907425, 116.311221 39.959550, 116.297064 39.982798, 116.285391 40.013307, 116.223593 39.993320))'));",
+            "INSERT INTO REGIONS VALUES (2, POLYGONFROMTEXT('POLYGON((116.285391 40.013307, 116.297064 39.982798, 116.311221 39.959550, 116.314654 39.907425, 116.417906 39.908933, 116.417098 40.022447, 116.285391 40.013307))'));",
+            "INSERT INTO REGIONS VALUES (3, POLYGONFROMTEXT('POLYGON((116.417906 39.908933, 116.541565 39.910605, 116.541565 39.942285, 116.484160 40.013818, 116.417098 40.022447, 116.417906 39.908933))'));",
+            "INSERT INTO REGIONS VALUES (4, POLYGONFROMTEXT('POLYGON((116.314654 39.907425, 116.210284 39.913219, 116.236834 39.833608, 116.276535 39.774669, 116.302437 39.781428, 116.341139 39.778454, 116.346115 39.831547, 116.290273 39.830698, 116.314654 39.907425))'));",
+            "INSERT INTO REGIONS VALUES (5, POLYGONFROMTEXT('POLYGON((116.341139 39.778454, 116.368231 39.776329, 116.379289 39.758905, 116.417438 39.766130, 116.430708 39.790775, 116.417906 39.908933, 116.314654 39.907425, 116.290273 39.830698, 116.346115 39.831547, 116.341139 39.778454))'));",
+            "INSERT INTO REGIONS VALUES (6, POLYGONFROMTEXT('POLYGON((116.417906 39.908933, 116.430708 39.790775, 116.461670 39.791625, 116.476598 39.807342, 116.542945 39.845557, 116.541565 39.910605, 116.417906 39.908933))'));",
+            "INSERT INTO TAXI_LOCATIONS VALUES (223, '2008-02-02 15:31:02', POINTFROMTEXT('POINT(116.286058 39.990632)'));", // region 1
+            "INSERT INTO TAXI_LOCATIONS VALUES (223, '2008-02-02 15:31:02', POINTFROMTEXT('POINT(116.471170 39.953689)'));", // region 3
+            "INSERT INTO TAXI_LOCATIONS VALUES (223, '2008-02-02 15:31:02', POINTFROMTEXT('POINT(116.334239 39.861732)'));", // region 5
+            "INSERT INTO TAXI_LOCATIONS VALUES (223, '2008-02-02 15:31:02', POINTFROMTEXT('POINT(116.433545 39.896514)'));", // region 6
+            "INSERT INTO TAXI_LOCATIONS VALUES (223, '2008-02-02 15:31:02', POINTFROMTEXT('POINT(116.537664 39.913775)'));"  // region 3
+        };
+        for (String insert : inserts) {
+            insertRowAdHoc(client, insert);
+        }
+        VoltTable vresult = client.callProcedure("@AdHoc", "SELECT * FROM REGIONAL_TAXI_COUNT ORDER BY 1;").getResults()[0];
+        assertContentOfTable(new Object[][]{{1, 1}, {3, 2}, {5, 1}, {6, 1}}, vresult);
     }
 
     public void testEng11024() throws Exception {
@@ -1808,8 +1987,374 @@ public class TestMaterializedViewSuite extends RegressionSuite {
         assertTablesAreEqual(prefix + "v27", vtExpected, vtActual, EPSILON);
     }
 
+    public void testEng11047() throws Exception {
+        Client client = getClient();
+
+        ClientResponse cr;
+        VoltTable      vt;
+
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-1, null, null, null);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-1, null, null, null);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-2, null, null, -22.22);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-2, null, null, -22.22);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-3, null, -333, null);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-3, null, -333, null);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-4, null, -333, -22.22);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-4, null, -333, -22.22);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-5, 'eee', null, null);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-5, 'eee', null, null);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-6, 'eee', null, -66.66);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-6, 'eee', null, -66.66);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-7, 'eee', -777, null);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-7, 'eee', -777, null);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-8, 'eee', -777, -66.66);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-8, 'eee', -777, -66.66);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-9, 'jjj', -777, -66.66);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-9, 'jjj', -777, -66.66);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-10, 'jjj', -10, -10);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-10, 'jjj', -10, -10);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-11, 'jjj', -11, -11);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-11, 'jjj', -11, -11);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-12, 'mmm', -12, -12);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-12, 'mmm', -12, -12);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-13, 'mmm', -13, -13);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-13, 'mmm', -13, -13);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-14, 'bouSWVaJwQHtrp', -16078, 5.88087039394022959016e-02);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-14, 'FOO', -16079, 9.88087039394022959016e-02);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (-15, 'NhFmPDULXEFLGI', 29960, 3.59831007623149345953e-01);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (-15, 'BAR', 29967, 7.59831007623149345953e-01);");
+
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (1, 'aaa', 1, 0);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (1, 'yyy', 1, 0);");
+        client.callProcedure("@AdHoc", "INSERT INTO P2_ENG_11024 VALUES (2, 'xxx', 2, 0);");
+        client.callProcedure("@AdHoc", "INSERT INTO R2_ENG_11024 VALUES (2, 'zzz', 2, 0);");
+
+        // The answers here and in the next query were determined by
+        // a judicious mix of testing and clever insertion.  The last four
+        // insert statements above give the values in the second test.
+        cr = client.callProcedure("@AdHoc", "SELECT (A.NUM) AS Q5 FROM V21 A WHERE (A.NUM) = (A.ID - 14) ORDER BY 1 LIMIT 82;");
+        assertEquals(ClientResponse.SUCCESS, cr.getStatus());
+        vt = cr.getResults()[0];
+        assertEquals(1, vt.getRowCount());
+        vt.advanceRow();
+        assertEquals(-13, vt.getLong(0));
+
+        cr = client.callProcedure("@AdHoc", "SELECT (A.NUM) AS Q5 FROM V21 A WHERE (A.NUM) = (A.ID) ORDER BY 1 LIMIT 82;");
+        assertEquals(ClientResponse.SUCCESS, cr.getStatus());
+        vt = cr.getResults()[0];
+        assertEquals(1, vt.getRowCount());
+        vt.advanceRow();
+        assertEquals(1, vt.getLong(0));
+
+    }
+
+    // Regression test for ENG-11074
+    public void testEng11074() throws Exception {
+        Client client = getClient();
+        VoltTable      vt;
+
+        client.callProcedure("P1_ENG_11074.Insert", 0, "foo", "bar", "baz", 6.66);
+        client.callProcedure("P1_ENG_11074.Insert", 1, "baz", "foo", "bar", 6.66);
+        client.callProcedure("P2_ENG_11074.Insert", 0, "alpha", "beta", "gamma", 6.66);
+        client.callProcedure("P2_ENG_11074.Insert", 1, "aleph", "beth", "gimel", 6.66);
+
+        vt = client.callProcedure("@AdHoc", "select * from vjoin_eng_11074").getResults()[0];
+        assertContentOfTable(new Object[][] {{2, "gamma"}}, vt);
+
+        vt = client.callProcedure("@AdHoc", "select * from v1_eng_11074").getResults()[0];
+        assertContentOfTable(new Object[][] {{2, "bar"}}, vt);
+    }
+
+    // Repro for ENG-11080
+    public void testEng11080() throws Exception {
+        Client client = getClient();
+
+        // ID, VCHAR, NUM, RATIO
+        String[] stmts = {
+                "INSERT INTO R1_ENG_11024 VALUES (100, null, 50,  null)",
+                "INSERT INTO R1_ENG_11024 VALUES (1000, null, 50,  null)",
+                "INSERT INTO R2_ENG_11024 VALUES (100, null, 50,  null)"
+        };
+
+        for (String stmt : stmts) {
+            client.callProcedure("@AdHoc", stmt);
+        }
+
+        VoltTable vt;
+
+        // SELECT list of both views is:
+        //   VCHAR, COUNT(*), MAX(ID)
+        // At this point both views have just one group, where the GB key is NULL.
+        // Both views should have the same content because the view with the join
+        // is just joining to one row.
+
+        Object[][] expectedBeforeDelete = new Object[][] {{null, 2, 1000}};
+        Object[][] expectedAfterDelete = new Object[][] {{null, 1, 100}};
+
+        vt = client.callProcedure("@AdHoc", "select * from v_eng_11080 order by 1, 2, 3").getResults()[0];
+        assertContentOfTable(expectedBeforeDelete, vt);
+
+        vt = client.callProcedure("@AdHoc", "select * from vjoin_eng_11080 order by 1, 2, 3").getResults()[0];
+        assertContentOfTable(expectedBeforeDelete, vt);
+
+        // This deletes the current MAX value for both views
+        client.callProcedure("@AdHoc", "delete from r1_eng_11024 where id = 1000");
+
+        // In this bug we had trouble finding the new MAX or MIN for groups with
+        // NULL GB keys.  Ensure that the views are still correct.
+
+        vt = client.callProcedure("@AdHoc", "select * from v_eng_11080 order by 1, 2, 3").getResults()[0];
+        assertContentOfTable(expectedAfterDelete, vt);
+
+        vt = client.callProcedure("@AdHoc", "select * from vjoin_eng_11080 order by 1, 2, 3").getResults()[0];
+        assertContentOfTable(expectedAfterDelete, vt);
+    }
+
+
+    public void testEng11100() throws Exception {
+        Client client = getClient();
+        String[] stmts = {
+                "INSERT INTO P1_ENG_11074 VALUES (-2,   null,  null, 'bbb', -22.22);",
+                "INSERT INTO R1_ENG_11074 VALUES (-2,   null,  null, 'bbb', -22.22);",
+                // Note: following two statements violate NOT NULL constraints on rightmost column.
+                "INSERT INTO P1_ENG_11074 VALUES (-3,   null, 'ccc',  null,  null);",
+                "INSERT INTO R1_ENG_11074 VALUES (-3,   null, 'ccc',  null,  null);",
+                "INSERT INTO P1_ENG_11074 VALUES (-4,   null, 'ccc', 'bbb', -22.22);",
+                "INSERT INTO R1_ENG_11074 VALUES (-4,   null, 'ccc', 'bbb', -22.22);",
+                "INSERT INTO P1_ENG_11074 VALUES (-6,  'eee',  null, 'fff', -66.66);",
+                "INSERT INTO R1_ENG_11074 VALUES (-6,  'eee',  null, 'fff', -66.66);",
+                "INSERT INTO P1_ENG_11074 VALUES (-8,  'eee', 'ggg', 'fff', -66.66);",
+                "INSERT INTO R1_ENG_11074 VALUES (-8,  'eee', 'ggg', 'fff', -66.66);",
+                "INSERT INTO P1_ENG_11074 VALUES (-9,  'jjj', 'ggg', 'fff', -66.66);",
+                "INSERT INTO R1_ENG_11074 VALUES (-9,  'jjj', 'ggg', 'fff', -66.66);",
+                "INSERT INTO P1_ENG_11074 VALUES (-10, 'jjj', 'jjj', 'jjj', -10);",
+                "INSERT INTO R1_ENG_11074 VALUES (-10, 'jjj', 'jjj', 'jjj', -10);",
+                "INSERT INTO P1_ENG_11074 VALUES (-11, 'klm', 'klm', 'klm', -11);",
+                "INSERT INTO R1_ENG_11074 VALUES (-11, 'klm', 'klm', 'klm', -11);",
+                "INSERT INTO P1_ENG_11074 VALUES (-12, 'lll', 'lll', 'lll', -12);",
+                "INSERT INTO R1_ENG_11074 VALUES (-12, 'lll', 'lll', 'lll', -12);",
+                "INSERT INTO P1_ENG_11074 VALUES (-13, 'mmm', 'mmm', 'mmm', -13);",
+                "INSERT INTO R1_ENG_11074 VALUES (-13, 'mmm', 'mmm', 'mmm', -13);",
+            };
+
+        int numExc = 0;
+        for (String stmt : stmts) {
+            try {
+                client.callProcedure("@AdHoc", stmt);
+            }
+            catch (ProcCallException pce) {
+                String expectedMessage;
+                if (isHSQL()) {
+                    expectedMessage = "integrity constraint violation";
+                }
+                else {
+                    expectedMessage = "Constraint Type NOT_NULL";
+                }
+
+                assertTrue("Unexpected message: " + pce.getMessage(),
+                        pce.getMessage().contains(expectedMessage));
+                ++numExc;
+            }
+
+            VoltTable expected = client.callProcedure("@AdHoc",
+                    "SELECT   T1.VCHAR_INLINE_MAX,   COUNT(*),   MIN(T2.VCHAR_INLINE_MAX)   "
+                    + "FROM P1_ENG_11074 T1 JOIN R1_ENG_11074 T2 ON T1.ID  <  T2.ID "
+                    + "GROUP BY T1.VCHAR_INLINE_MAX "
+                    + "order by 1, 2, 3").getResults()[0];
+            VoltTable actual = client.callProcedure("@AdHoc",
+                    "select * "
+                    + "from v_eng_11100 "
+                    + "order by 1, 2, 3;").getResults()[0];
+            assertTablesAreEqual("Query and view after stmt: " + stmt, expected, actual);
+        }
+
+        assertEquals(numExc, 2);
+    }
+
+    public void testCreateViewWithParams() throws Exception {
+        Client client = getClient();
+
+        String expectedMsg = "Materialized view \"V\" contains placeholders \\(\\?\\), "
+                + "which are not allowed in the SELECT query for a view.";
+        verifyStmtFails(client,
+                "create view v as "
+                + "select t3.f5, count(*) "
+                + "FROM t3_eng_11119 as t3 INNER JOIN T1_eng_11119 as t1 "
+                + "ON T1.f1 = T3.f4 "
+                + "WHERE T3.f4 = ? "
+                + "group by t3.f5;",
+                expectedMsg);
+
+        verifyStmtFails(client,
+                "create view v as "
+                + "select t3.f5, count(*) "
+                + "FROM t3_eng_11119 as t3 "
+                + "WHERE T3.f4 = ? "
+                + "group by t3.f5;",
+                expectedMsg);
+    }
+
+    public void testEng11203() throws Exception {
+        // This test case has AdHoc DDL, so it cannot be ran in the HSQL backend.
+        if (! isHSQL()) {
+            Client client = getClient();
+            Object[][] initialRows = {{"ENG_11203_A", 1, 2, 4}, {"ENG_11203_B", 1, 2, 4}};
+            Object[][] secondRows = {{"ENG_11203_A", 6, 2, 4}, {"ENG_11203_B", 6, 2, 4}};
+            // This test case tests ENG-11203, verifying that on single table views,
+            // if a new index was created on the view target table, this new index
+            // will be properly tracked by the MaterializedViewTriggerForInsert.
+
+            // - 1 - Insert the initial data into the view source table.
+            insertRow(client, initialRows[0]);
+            insertRow(client, initialRows[1]);
+            VoltTable vt = client.callProcedure("@AdHoc",
+                    "SELECT * FROM V_ENG_11203_SINGLE").getResults()[0];
+            assertContentOfTable(new Object[][] {{2, 1, 1}}, vt);
+            vt = client.callProcedure("@AdHoc",
+                    "SELECT * FROM V_ENG_11203_JOIN").getResults()[0];
+            assertContentOfTable(new Object[][] {{2, 1, 1}}, vt);
+
+            // - 2 - Now add a new index on the view target table.
+            try {
+                client.callProcedure("@AdHoc",
+                    "CREATE INDEX I_ENG_11203_SINGLE ON V_ENG_11203_SINGLE(a, b);");
+            } catch (ProcCallException pce) {
+                pce.printStackTrace();
+                fail("Should be able to create an index on the single table view V_ENG_11203_SINGLE.");
+            }
+            try {
+                client.callProcedure("@AdHoc",
+                    "CREATE INDEX I_ENG_11203_JOIN ON V_ENG_11203_JOIN(a, b);");
+            } catch (ProcCallException pce) {
+                pce.printStackTrace();
+                fail("Should be able to create an index on the joined table view V_ENG_11203_JOIN.");
+            }
+
+            // - 3 - Insert another row of data.
+            insertRow(client, secondRows[0]);
+            insertRow(client, secondRows[1]);
+            vt = client.callProcedure("@AdHoc",
+                "SELECT * FROM V_ENG_11203_SINGLE").getResults()[0];
+            assertContentOfTable(new Object[][] {{2, 2, 6}}, vt);
+            vt = client.callProcedure("@AdHoc",
+                "SELECT * FROM V_ENG_11203_JOIN").getResults()[0];
+            assertContentOfTable(new Object[][] {{2, 4, 6}}, vt);
+
+            // - 4 - Start to delete rows.
+            // If the new index was not tracked properly, the server will start to crash
+            // because the newly-inserted row was not inserted into the index.
+            deleteRow(client, initialRows[0]);
+            deleteRow(client, initialRows[1]);
+            deleteRow(client, secondRows[0]);
+            deleteRow(client, secondRows[1]);
+            vt = client.callProcedure("@AdHoc",
+                "SELECT * FROM V_ENG_11203_SINGLE").getResults()[0];
+            assertContentOfTable(new Object[][] {}, vt);
+            vt = client.callProcedure("@AdHoc",
+                "SELECT * FROM V_ENG_11203_JOIN").getResults()[0];
+            assertContentOfTable(new Object[][] {}, vt);
+
+            // Restore catalog changes:
+            try {
+                client.callProcedure("@AdHoc",
+                    "DROP INDEX I_ENG_11203_JOIN;" +
+                    "DROP INDEX I_ENG_11203_SINGLE;");
+            } catch (ProcCallException pce) {
+                pce.printStackTrace();
+                fail("Should be able to drop indexes on the joined table views V_ENG_11203_JOIN and V_ENG_11203_SINGLE.");
+            }
+        }
+    }
+
+    public void testEng11314() throws Exception {
+        Client client = getClient();
+        String[] insertT1 = {
+            "INSERT INTO T1_ENG_11314 (G1, C2, C3) VALUES (1, 1024, 64);",
+            "INSERT INTO T1_ENG_11314 (G1, C2, C3) VALUES (2, 2048, 32);"
+        };
+        String insertT2 = "INSERT INTO T2_ENG_11314 (G0) VALUES (0);";
+        String bugTrigger = "UPDATE T1_ENG_11314 SET C2=64, C3=1024 WHERE G1=2;";
+        Object[][] viewContent = { {0, 2, 0, 0, 1024, 64, 0, 0, 0, 0, 0, 0, "abc", "def"} };
+        // -1- Insert data
+        insertRowAdHoc(client, insertT1[0]);
+        insertRowAdHoc(client, insertT1[1]);
+        insertRowAdHoc(client, insertT2);
+        // -2- Test if the UPDATE statement will trigger an error on single table view V1:
+        client.callProcedure("@AdHoc", bugTrigger);
+        // -3- Verify view contents
+        VoltTable vt = client.callProcedure("@AdHoc",
+                "SELECT * FROM V1_ENG_11314").getResults()[0];
+            assertContentOfTable(viewContent, vt);
+        vt = client.callProcedure("@AdHoc",
+                "SELECT * FROM V2_ENG_11314").getResults()[0];
+            assertContentOfTable(viewContent, vt);
+    }
+
     /**
-     * Build a list of the tests that will be run when TestTPCCSuite gets run by JUnit.
+     * It's not allowed to have NOW or CURRENT_TIMESTAMP in a
+     * join condition or a where clause.
+     * @throws Exception
+     */
+    public void doTestMVFailedCase(String sql, String pattern) throws Exception {
+        Client client = getClient();
+        ClientResponse cr = null;
+        client.callProcedure("@AdHoc", "drop view mv if exists");
+        String msg = null;
+        boolean success;
+        try {
+            cr = client.callProcedure("@AdHoc", sql);
+            success = true;
+        } catch (Exception ex) {
+            success = false;
+            msg = ex.getMessage();
+        }
+        client.callProcedure("@AdHoc", "drop view mv if exists");
+        assertFalse("Unexpected compilation success", success);
+        assertTrue("Did not find pattern \"" + pattern + "\" in error message.",
+                   msg.contains(pattern));
+    }
+
+    public void testNowFailed() throws Exception {
+        String sql;
+        sql = "CREATE VIEW MV AS SELECT L.ID, COUNT(*) FROM ENG11495 AS L JOIN ENG11495 AS R ON L.TS = NOW GROUP BY L.ID";
+        doTestMVFailedCase(sql, "cannot include the function NOW or CURRENT_TIMESTAMP");
+        sql = "CREATE VIEW MV AS SELECT L.ID, COUNT(*) FROM ENG11495 AS L JOIN ENG11495 AS R ON L.TS = R.TS WHERE L.TS < NOW GROUP BY L.ID";
+        doTestMVFailedCase(sql, "cannot include the function NOW or CURRENT_TIMESTAMP");
+        sql = "CREATE VIEW MV AS SELECT L.ID, COUNT(*), MAX(NOW)  FROM ENG11495 AS L JOIN ENG11495 AS R ON L.TS = R.TS GROUP BY L.ID";
+        doTestMVFailedCase(sql, "cannot include the function NOW or CURRENT_TIMESTAMP");
+    }
+
+    public void testENG11935() throws Exception {
+        // to_timestamp function is not implemented in the HSQL backend, skip HSQL.
+        if (isHSQL()) {
+            return;
+        }
+        // All the statements will not crash the server.
+        Client client = getClient();
+        // exec ENG11935.insert '0' 'abc' 1486148453 'def' 'ghi' 'jkl' 'mno0' 35094 30847 27285 36335 59247 50750 '0';
+        // exec ENG11935.insert '0' 'abc' 1486148453 'def' 'ghi' 'jkl' 'mno1' 35094 30847 27285 36335 59247 50750 '1';
+        client.callProcedure("ENG11935.insert", "0", "abc", 1486148453, "def", "ghi", "jkl",
+                             "mno0", 35094, 30847, 27285, 36335, 59247, 50750, "0");
+        client.callProcedure("ENG11935.insert", "0", "abc", 1486148453, "def", "ghi", "jkl",
+                             "mno1", 35094, 30847, 27285, 36335, 59247, 50750, "1");
+        TimestampType timestamp = new TimestampType("1970-01-18 04:50:00.000000");
+        VoltTable vt = client.callProcedure("@AdHoc", "SELECT * FROM V_ENG11935;").getResults()[0];
+        Object[][] expectedAnswer = new Object[][] {
+            {"0", "abc", "def", "ghi", "jkl", timestamp, 1486200, 2, "mno1",
+             new BigDecimal("1403760.000000000000"), new BigDecimal("1233880.000000000000"),
+             1091400, 1453400, 64662175800L, 73760050000L} };
+        assertContentOfTable(expectedAnswer, vt);
+        client.callProcedure("@AdHoc", "DELETE FROM ENG11935 WHERE VAR1 = '0' AND PRIMKEY = '1';");
+        vt = client.callProcedure("@AdHoc", "SELECT * FROM V_ENG11935;").getResults()[0];
+        expectedAnswer = new Object[][] {
+            {"0", "abc", "def", "ghi", "jkl", timestamp, 1486200, 1, "mno0",
+             new BigDecimal("701880.000000000000"), new BigDecimal("616940.000000000000"),
+             545700, 726700, 32331087900L, 36880025000L} };
+        assertContentOfTable(expectedAnswer, vt);
+    }
+
+    /**
+     * Build a list of the tests that will be run when TestMaterializedViewSuite gets run by JUnit.
      * Use helper classes that are part of the RegressionSuite framework.
      * This particular class runs all tests on the the local JNI backend with both
      * one and two partition configurations, as well as on the hsql backend.
@@ -1817,51 +2362,41 @@ public class TestMaterializedViewSuite extends RegressionSuite {
      * @return The TestSuite containing all the tests to be run.
      */
     static public Test suite() {
-        URL url = AddPerson.class.getResource("matviewsuite-ddl.sql");
-        url.getPath();
-
-        String schemaPath = url.getPath();
-
         // the suite made here will all be using the tests from this class
         MultiConfigSuiteBuilder builder = new MultiConfigSuiteBuilder(TestMaterializedViewSuite.class);
-
-        /////////////////////////////////////////////////////////////
-        // CONFIG #1: 2 Local Site/Partitions running on JNI backend
-        /////////////////////////////////////////////////////////////
-
-        // get a server config for the native backend with one sites/partitions
-        //VoltServerConfig config = new LocalSingleProcessServer("matview-onesite.jar", 1, BackendTarget.NATIVE_EE_IPC);
-        VoltServerConfig config = new LocalCluster("matview-twosites.jar", 2, 1, 0, BackendTarget.NATIVE_EE_JNI);
 
         // build up a project builder for the workload
         VoltProjectBuilder project = new VoltProjectBuilder();
         project.setUseDDLSchema(true);
-        //project.setBackendTarget(BackendTarget.NATIVE_EE_IPC);
+
+        URL url = AddPerson.class.getResource("matviewsuite-ddl.sql");
+        String schemaPath = url.getPath();
         project.addSchema(schemaPath);
 
         project.addProcedures(PROCEDURES);
-        // build the jarfile
-        boolean success = config.compile(project);
-        assertTrue(success);
 
+        /////////////////////////////////////////////////////////////
+        // CONFIG #1: 2 Local Sites/Partitions running on JNI backend
+        /////////////////////////////////////////////////////////////
+        LocalCluster config = new LocalCluster("matview-twosites.jar", 2, 1, 0, BackendTarget.NATIVE_EE_JNI);
+        //* enable for simplified config */ config = new LocalCluster("matview-onesite.jar", 1, 1, 0, BackendTarget.NATIVE_EE_JNI);
+        // build the jarfile
+        assertTrue(config.compile(project));
         // add this config to the set of tests to run
         builder.addServerConfig(config);
 
         /////////////////////////////////////////////////////////////
         // CONFIG #2: 1 Local Site/Partition running on HSQL backend
         /////////////////////////////////////////////////////////////
-
         config = new LocalCluster("matview-hsql.jar", 1, 1, 0, BackendTarget.HSQLDB_BACKEND);
-        success = config.compile(project);
-        assertTrue(success);
+        assertTrue(config.compile(project));
         builder.addServerConfig(config);
 
         /////////////////////////////////////////////////////////////
         // CONFIG #3: 3-node k=1 cluster
         /////////////////////////////////////////////////////////////
         config = new LocalCluster("matview-cluster.jar", 2, 3, 1, BackendTarget.NATIVE_EE_JNI);
-        success = config.compile(project);
-        assertTrue(success);
+        assertTrue(config.compile(project));
         builder.addServerConfig(config);
 
         return builder;

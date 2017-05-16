@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -23,9 +23,11 @@ import java.util.ArrayList;
 import org.voltcore.messaging.Subject;
 import org.voltcore.messaging.VoltMessage;
 import org.voltcore.utils.CoreUtils;
+import org.voltdb.DependencyPair;
 import org.voltdb.PrivateVoltTableFactory;
 import org.voltdb.VoltTable;
 import org.voltdb.exceptions.SerializableException;
+import org.voltdb.iv2.TxnEgo;
 
 /**
  * Message from an execution site which is participating in a transaction
@@ -49,12 +51,16 @@ public class FragmentResponseMessage extends VoltMessage {
     // Not currently used; leaving it in for now
     boolean m_dirty = true;
     boolean m_recovering = false;
+    // a flag to decide whether to buffer this response or not
+    // it does not need to send over network, because it's only set to be false
+    // for BorrowTask which executes locally.
+    // Writes are always false and the flag is not used.
+    boolean m_respBufferable = true;
     // WHA?  Why do we have a separate dependency count when
     // the array lists will tell you their lengths?  Doesn't look like
     // we do anything else with this value other than track the length
     short m_dependencyCount = 0;
-    ArrayList<Integer> m_dependencyIds = new ArrayList<Integer>();
-    ArrayList<VoltTable> m_dependencies = new ArrayList<VoltTable>();
+    ArrayList<DependencyPair> m_dependencies = new ArrayList<DependencyPair>();
     SerializableException m_exception;
 
     /** Empty constructor for de-serialization */
@@ -84,6 +90,7 @@ public class FragmentResponseMessage extends VoltMessage {
         m_status = resp.m_status;
         m_dirty = resp.m_dirty;
         m_recovering = resp.m_recovering;
+        m_respBufferable = resp.m_respBufferable;
         m_exception = resp.m_exception;
         m_subject = Subject.DEFAULT.getId();
     }
@@ -106,9 +113,8 @@ public class FragmentResponseMessage extends VoltMessage {
         m_recovering = recovering;
     }
 
-    public void addDependency(int dependencyId, VoltTable table) {
-        m_dependencyIds.add(dependencyId);
-        m_dependencies.add(table);
+    public void addDependency(DependencyPair dependency) {
+        m_dependencies.add(dependency);
         m_dependencyCount++;
     }
 
@@ -135,6 +141,14 @@ public class FragmentResponseMessage extends VoltMessage {
         return m_spHandle;
     }
 
+    public boolean getRespBufferable() {
+        return m_respBufferable;
+    }
+
+    public void setRespBufferable(boolean respBufferable) {
+        m_respBufferable = respBufferable;
+    }
+
     public byte getStatusCode() {
         return m_status;
     }
@@ -144,11 +158,15 @@ public class FragmentResponseMessage extends VoltMessage {
     }
 
     public int getTableDependencyIdAtIndex(int index) {
-        return m_dependencyIds.get(index);
+        return m_dependencies.get(index).depId;
     }
 
     public VoltTable getTableAtIndex(int index) {
-        return m_dependencies.get(index);
+        return m_dependencies.get(index).getTableDependency();
+    }
+
+    public ByteBuffer getBufferAtIndex(int index) {
+        return m_dependencies.get(index).getBufferDependency();
     }
 
     public SerializableException getException() {
@@ -169,17 +187,14 @@ public class FragmentResponseMessage extends VoltMessage {
             + 1 // node recovering flag
             + 2; // dependency count
 
-        // one int per dependency ID
-        msgsize += 4 * m_dependencyCount;
-
-        // one byte to indicate null dependency result table
-        msgsize += m_dependencies.size();
+        // one int per dependency ID and table length (0 = null)
+        msgsize += 8 * m_dependencyCount;
 
         // Add the actual result lengths
-        for (VoltTable dep : m_dependencies)
+        for (DependencyPair depPair : m_dependencies)
         {
-            if (dep != null) {
-                msgsize += dep.getSerializedSize();
+            if (depPair != null) {
+                msgsize += depPair.getBufferDependency().limit();
             }
         }
 
@@ -206,17 +221,15 @@ public class FragmentResponseMessage extends VoltMessage {
         buf.put((byte) (m_dirty ? 1 : 0));
         buf.put((byte) (m_recovering ? 1 : 0));
         buf.putShort(m_dependencyCount);
-        for (int i = 0; i < m_dependencyCount; i++)
-            buf.putInt(m_dependencyIds.get(i));
+        for (DependencyPair depPair : m_dependencies) {
+            buf.putInt(depPair.depId);
 
-        for (int i = 0; i < m_dependencyCount; i++)
-        {
-            VoltTable dep = m_dependencies.get(i);
+            ByteBuffer dep = depPair.getBufferDependency();
             if (dep == null) {
-                buf.put((byte) 0);
+                buf.putInt(0);
             } else {
-                buf.put((byte) 1);
-                dep.flattenToBuffer(buf);
+                buf.putInt(dep.remaining());
+                buf.put(dep);
             }
         }
 
@@ -240,14 +253,15 @@ public class FragmentResponseMessage extends VoltMessage {
         m_dirty = buf.get() == 0 ? false : true;
         m_recovering = buf.get() == 0 ? false : true;
         m_dependencyCount = buf.getShort();
-        for (int i = 0; i < m_dependencyCount; i++)
-            m_dependencyIds.add(buf.getInt());
         for (int i = 0; i < m_dependencyCount; i++) {
-            boolean isNull = buf.get() == 0 ? true : false;
+            int depId = buf.getInt();
+            int depLen = buf.getInt(buf.position());
+            boolean isNull = depLen == 0 ? true : false;
             if (isNull) {
-                m_dependencies.add(null);
+                m_dependencies.add(new DependencyPair.TableDependencyPair(depId, null));
             } else {
-                m_dependencies.add(PrivateVoltTableFactory.createVoltTableFromSharedBuffer(buf));
+                m_dependencies.add(new DependencyPair.TableDependencyPair(depId,
+                        PrivateVoltTableFactory.createVoltTableFromSharedBuffer(buf)));
             }
         }
         m_exception = SerializableException.deserializeFromBuffer(buf);
@@ -263,9 +277,9 @@ public class FragmentResponseMessage extends VoltMessage {
         sb.append(" TO ");
         sb.append(CoreUtils.hsIdToString(m_destinationHSId));
         sb.append(") FOR TXN ");
-        sb.append(m_txnId);
+        sb.append(TxnEgo.txnIdToString(m_txnId));
         sb.append(", SP HANDLE: ");
-        sb.append(m_spHandle);
+        sb.append(TxnEgo.txnIdToString(m_spHandle));
 
         if (m_status == SUCCESS)
             sb.append("\n  SUCCESS");
@@ -279,11 +293,18 @@ public class FragmentResponseMessage extends VoltMessage {
         else
             sb.append("\n  PRISTINE");
 
+        if (m_respBufferable)
+            sb.append("\n  BUFFERABLE");
+        else
+            sb.append("\n  NOT BUFFERABLE");
+
         for (int i = 0; i < m_dependencyCount; i++) {
-            sb.append("\n  DEP ").append(m_dependencyIds.get(i));
-            sb.append(" WITH ").append(m_dependencies.get(i).getRowCount()).append(" ROWS (");
-            for (int j = 0; j < m_dependencies.get(i).getColumnCount(); j++) {
-                sb.append(m_dependencies.get(i).getColumnName(j)).append(", ");
+            DependencyPair dep = m_dependencies.get(i);
+            sb.append("\n  DEP ").append(dep.depId);
+            VoltTable table = dep.getTableDependency();
+            sb.append(" WITH ").append(table.getRowCount()).append(" ROWS (");
+            for (int j = 0; j < table.getColumnCount(); j++) {
+                sb.append(table.getColumnName(j)).append(", ");
             }
             sb.setLength(sb.lastIndexOf(", "));
             sb.append(")");

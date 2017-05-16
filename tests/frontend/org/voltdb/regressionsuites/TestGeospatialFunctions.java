@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -960,6 +960,10 @@ public class TestGeospatialFunctions extends RegressionSuite {
                 + "order by borders.pk, places.pk;";
         vt2 = client.callProcedure("@AdHoc", sql).getResults()[0];
         assertTablesAreEqual(prefix, vt2, vt1, GEOGRAPHY_DISTANCE_EPSILON);
+
+        // Restore catalog changes:
+        ClientResponse cr = client.callProcedure("@AdHoc", "drop procedure DWithin_Proc;");
+        assertEquals(ClientResponse.SUCCESS, cr.getStatus());
     }
 
     public void testPolygonPointDWithinNegative() throws Exception {

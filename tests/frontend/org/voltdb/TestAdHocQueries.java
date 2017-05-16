@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -22,6 +22,10 @@
  */
 
 package org.voltdb;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.File;
 import java.io.IOException;
@@ -610,7 +614,7 @@ public class TestAdHocQueries extends AdHocQueryTester {
         m_client = ClientFactory.createClient();
         m_client.createConnection("localhost", config.m_port);
 
-        String sql = getQueryForLongQueryTable(750);
+        String sql = getQueryForLongQueryTable(1200);
         try {
             m_client.callProcedure("@AdHoc", sql);
             fail("Query was expected to generate stack overflow error");
@@ -819,10 +823,9 @@ public class TestAdHocQueries extends AdHocQueryTester {
                     "                      WHERE STAFF.EMPNUM = WORKS.EMPNUM);";
             try {
                 env.m_client.callProcedure("@AdHoc", adHocQuery);
-                fail("did not fail on subquery In/Exists");
             }
             catch (ProcCallException pcex) {
-                assertTrue(pcex.getMessage().indexOf("Subquery expressions are only supported in SELECT statements") > 0);
+                fail("did fail on subquery In/Exists in UPDATE statement");
             }
 
             adHocQuery = "     SELECT 'ZZ', EMPNUM, EMPNAME, -99 \n" +
@@ -894,7 +897,7 @@ public class TestAdHocQueries extends AdHocQueryTester {
                 fail("Compilation should have failed.");
             }
             catch(ProcCallException e) {
-                assertTrue(e.getMessage().contains("Error compiling"));
+                assertTrue(e.getMessage().contains("invalid format for a constant timestamp value"));
             }
             String sql = String.format("INSERT INTO TS_CONSTRAINT_EXCEPTION VALUES ('%s','{}');",
                     new TimestampType().toString());

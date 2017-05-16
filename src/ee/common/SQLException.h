@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -49,6 +49,7 @@ public:
     static const char* volt_decimal_serialization_error;
 
     SQLException(std::string sqlState, std::string message);
+    SQLException(std::string sqlState, int error_no, std::string message);
     SQLException(std::string sqlState, std::string message, VoltEEExceptionType type);
     SQLException(std::string sqlState, std::string message, int internalFlags);
     virtual ~SQLException() {}

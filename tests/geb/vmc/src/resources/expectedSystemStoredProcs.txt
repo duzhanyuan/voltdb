@@ -2,6 +2,7 @@
 # this list does not change)
 @Explain
 @ExplainProc
+@ExplainView
 @Pause
 @Quiesce
 @Resume
@@ -21,3 +22,5 @@
 @Promote
 @ValidatePartitioning
 @GetPartitionKeys
+@Trace
+@Trace

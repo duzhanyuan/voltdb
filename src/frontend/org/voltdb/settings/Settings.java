@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -22,17 +22,34 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.URI;
+import java.nio.file.Paths;
 import java.util.NavigableMap;
 import java.util.Properties;
 import java.util.UUID;
 
-import org.aeonbits.owner.Accessible;
+import org.voltdb.common.Constants;
 import org.voltdb.utils.Digester;
+import org.voltdb.utils.VoltFile;
+
+import org.aeonbits.owner.Accessible;
+import org.aeonbits.owner.ConfigFactory;
 
 import com.google_voltpatches.common.base.Joiner;
 import com.google_voltpatches.common.collect.ImmutableSortedMap;
 
 public interface Settings extends Accessible {
+    public final static String CONFIG_DIR = "org.voltdb.config.dir";
+
+    public static void initialize(File voltdbroot) {
+        if (ConfigFactory.getProperty(Settings.CONFIG_DIR) == null) try {
+            File confDH = new VoltFile(voltdbroot, Constants.CONFIG_DIR).getCanonicalFile();
+            String pathAsURI = confDH.toURI().getRawPath();
+            ConfigFactory.setProperty(Settings.CONFIG_DIR, pathAsURI);
+        } catch (IOException e) {
+            throw new SettingsException("failed to resolve the cluster settings directory", e);
+        }
+    }
 
     default NavigableMap<String, String> asMap() {
         ImmutableSortedMap.Builder<String, String> mb = ImmutableSortedMap.naturalOrder();
@@ -83,5 +100,25 @@ public interface Settings extends Accessible {
             throw new SettingsException("failed to convert properties to a byte array",e);
         }
         return bytes;
+    }
+
+    static File getConfigDir() {
+        final String configDN = ConfigFactory.getProperty(CONFIG_DIR).intern();
+        if (configDN == null || configDN.trim().isEmpty()) {
+            throw new IllegalStateException("property " + CONFIG_DIR + " must be defined");
+        }
+        URI uri = URI.create("file:" + configDN);
+        File configDH = Paths.get(uri).toFile();
+        if (!configDH.exists() && !configDH.mkdirs()) {
+            throw new SettingsException("failed to create " + configDN);
+        }
+        if (   !configDH.isDirectory()
+            || !configDH.canRead()
+            || !configDH.canWrite()
+            || !configDH.canExecute())
+        {
+            throw new SettingsException("cannot access " + configDN);
+        }
+        return configDH;
     }
 }

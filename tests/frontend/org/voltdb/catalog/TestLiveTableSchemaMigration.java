@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -26,8 +26,6 @@ package org.voltdb.catalog;
 import java.io.File;
 import java.io.IOException;
 
-import junit.framework.TestCase;
-
 import org.voltdb.ClientResponseImpl;
 import org.voltdb.ServerThread;
 import org.voltdb.TableHelper;
@@ -44,6 +42,8 @@ import org.voltdb.compiler.DeploymentBuilder;
 import org.voltdb.compiler.VoltProjectBuilder;
 import org.voltdb.utils.MiscUtils;
 
+import junit.framework.TestCase;
+
 public class TestLiveTableSchemaMigration extends TestCase {
 
     /**
@@ -52,7 +52,7 @@ public class TestLiveTableSchemaMigration extends TestCase {
      */
     String catalogPathForTable(VoltTable t, String jarname) throws IOException {
         CatalogBuilder builder = new CatalogBuilder();
-        String ddl = TableHelper.ddlForTable(t);
+        String ddl = TableHelper.ddlForTable(t, false);
         builder.addLiteralSchema(ddl);
         String retval = Configuration.getPathToCatalogForTest(jarname);
         boolean success = builder.compile(retval);
@@ -86,9 +86,9 @@ public class TestLiveTableSchemaMigration extends TestCase {
             byte[] catBytes2 = MiscUtils.fileToBytes(new File(catPath2));
 
             DeploymentBuilder depBuilder = new DeploymentBuilder(1, 1, 0);
-            depBuilder.setVoltRoot("/tmp/foobar");
+            depBuilder.setVoltRoot("/tmp/rootbar");
             // disable logging
-            depBuilder.configureLogging("/tmp/foobar", "/tmp/foobar", false, false, 1, 1, 3);
+            depBuilder.configureLogging("/tmp/foobar", "/tmp/goobar", false, false, 1, 1, 3);
             String deployment = depBuilder.getXML();
             File deploymentFile = VoltProjectBuilder.writeStringToTempFile(deployment);
 
@@ -101,8 +101,8 @@ public class TestLiveTableSchemaMigration extends TestCase {
             server.start();
             server.waitForInitialization();
 
-            System.out.printf("PRE:  %s\n", TableHelper.ddlForTable(t1));
-            System.out.printf("POST: %s\n", TableHelper.ddlForTable(t2));
+            System.out.printf("PRE:  %s\n", TableHelper.ddlForTable(t1, false));
+            System.out.printf("POST: %s\n", TableHelper.ddlForTable(t2, false));
 
             ClientConfig clientConfig = new ClientConfig();
             client = ClientFactory.createClient(clientConfig);
@@ -162,10 +162,10 @@ public class TestLiveTableSchemaMigration extends TestCase {
             String catPath1 = catalogPathForTable(t1, "t1.jar");
 
             DeploymentBuilder depBuilder = new DeploymentBuilder(1, 1, 0);
-            depBuilder.setVoltRoot("/tmp/foobar");
+            depBuilder.setVoltRoot("/tmp/rootbar");
             depBuilder.setUseDDLSchema(true);
             // disable logging
-            depBuilder.configureLogging("/tmp/foobar", "/tmp/foobar", false, false, 1, 1, 3);
+            depBuilder.configureLogging("/tmp/foobar", "/tmp/goobar", false, false, 1, 1, 3);
             String deployment = depBuilder.getXML();
             File deploymentFile = VoltProjectBuilder.writeStringToTempFile(deployment);
 
@@ -178,8 +178,8 @@ public class TestLiveTableSchemaMigration extends TestCase {
             server.start();
             server.waitForInitialization();
 
-            System.out.printf("PRE:  %s\n", TableHelper.ddlForTable(t1));
-            System.out.printf("POST: %s\n", TableHelper.ddlForTable(t2));
+            System.out.printf("PRE:  %s\n", TableHelper.ddlForTable(t1, false));
+            System.out.printf("POST: %s\n", TableHelper.ddlForTable(t2, false));
 
             TableHelper.migrateTable(t1, t2);
             t2 = TableHelper.sortTable(t2);

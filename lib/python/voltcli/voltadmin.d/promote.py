@@ -1,5 +1,5 @@
 # This file is part of VoltDB.
-# Copyright (C) 2008-2016 VoltDB Inc.
+# Copyright (C) 2008-2017 VoltDB Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -24,4 +24,4 @@ def promote(runner):
     if status == 0:
         runner.info('The cluster is promoted to normal operation.')
     else:
-        runner.error('The cluster failed to promote with status: %d' % status)
+        runner.abort('The cluster failed to promote with status: %d' % status)

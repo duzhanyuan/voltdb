@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,8 +17,6 @@
 
 package org.voltdb.sysprocs;
 
-import java.nio.ByteBuffer;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -27,7 +25,6 @@ import org.json_voltpatches.JSONStringer;
 import org.voltcore.utils.Pair;
 import org.voltdb.DRConsumerDrIdTracker;
 import org.voltdb.DependencyPair;
-import org.voltdb.ExtensibleSnapshotDigestData;
 import org.voltdb.ParameterSet;
 import org.voltdb.SystemProcedureExecutionContext;
 import org.voltdb.VoltSystemProcedure;
@@ -37,7 +34,8 @@ import org.voltdb.jni.ExecutionEngine.TaskType;
 public class ExecuteTask_SP extends VoltSystemProcedure {
 
     @Override
-    public void init() {
+    public long[] getPlanFragmentIds() {
+        return new long[]{};
     }
 
     @Override
@@ -54,10 +52,12 @@ public class ExecuteTask_SP extends VoltSystemProcedure {
      *
      * @param ctx  execution context
      * @param partitionParam  key for routing stored procedure to correct site
-     * @param taskId          type of the task to execute
+     * @param params          additional parameter(s) for the task to execute, first one is always task type
      */
-    public void run(SystemProcedureExecutionContext ctx, byte[] partitionParam, byte taskId)
+    public void run(SystemProcedureExecutionContext ctx, byte[] partitionParam, byte[] params)
     {
+        assert params.length > 0;
+        byte taskId = params[0];
         TaskType taskType = TaskType.values()[taskId];
         switch (taskType) {
         case SP_JAVA_GET_DRID_TRACKER:
@@ -70,6 +70,11 @@ public class ExecuteTask_SP extends VoltSystemProcedure {
             }
 
             break;
+        case RESET_DR_APPLIED_TRACKER_SINGLE:
+            assert params.length == 2;
+            byte clusterId = params[1];
+            ctx.resetDrAppliedTracker(clusterId);
+            break;
         default:
             throw new VoltAbortException("Unable to find the task associated with the given task id");
         }
@@ -80,8 +85,8 @@ public class ExecuteTask_SP extends VoltSystemProcedure {
     throws JSONException {
         JSONStringer stringer = new JSONStringer();
         stringer.object();
-        stringer.key("lastConsumerSpUniqueId").value(lastConsumerUniqueIds.getFirst());
-        stringer.key("lastConsumerMpUniqueId").value(lastConsumerUniqueIds.getSecond());
+        stringer.keySymbolValuePair("lastConsumerSpUniqueId", lastConsumerUniqueIds.getFirst());
+        stringer.keySymbolValuePair("lastConsumerMpUniqueId", lastConsumerUniqueIds.getSecond());
         stringer.key("trackers").object();
         if (allProducerTrackers != null) {
             for (Map.Entry<Integer, Map<Integer, DRConsumerDrIdTracker>> clusterTrackers : allProducerTrackers.entrySet()) {

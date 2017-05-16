@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -29,9 +29,9 @@ import java.util.Set;
 import java.util.TreeMap;
 
 import org.voltdb.BackendTarget;
-import org.voltdb.ReplicationRole;
 import org.voltdb.StartAction;
 import org.voltdb.VoltDB;
+import org.voltdb.common.Constants;
 import org.voltdb.probe.MeshProber;
 
 import com.google_voltpatches.common.base.Joiner;
@@ -87,7 +87,6 @@ public class CommandLine extends VoltDB.Configuration
         // final in baseclass: cl.m_isEnterprise = m_isEnterprise;
         cl.m_deadHostTimeoutMS = m_deadHostTimeoutMS;
         cl.m_startMode = m_startMode;
-        cl.m_replicationRole = m_replicationRole;
         cl.m_selectedRejoinInterface = m_selectedRejoinInterface;
         cl.m_quietAdhoc = m_quietAdhoc;
         // final in baseclass: cl.m_commitLogDir = new File("/tmp");
@@ -99,6 +98,7 @@ public class CommandLine extends VoltDB.Configuration
         cl.m_versionCompatibilityRegexOverrideForTest = m_versionCompatibilityRegexOverrideForTest;
         cl.m_buildStringOverrideForTest = m_buildStringOverrideForTest;
         cl.m_forceVoltdbCreate = m_forceVoltdbCreate;
+        cl.m_userSchema = m_userSchema;
 
         // second, copy the derived class fields
         cl.includeTestOpts = includeTestOpts;
@@ -124,14 +124,18 @@ public class CommandLine extends VoltDB.Configuration
         cl.m_hostCount = m_hostCount;
         cl.m_enableAdd = m_enableAdd;
         cl.m_voltdbRoot = m_voltdbRoot;
-
+        cl.m_newCli = m_newCli;
+        cl.m_sslEnable = m_sslEnable;
+        cl.m_sslExternal = m_sslExternal;
+        cl.m_placementGroup = m_placementGroup;
         // deep copy the property map if it exists
         if (javaProperties != null) {
-            cl.javaProperties = new TreeMap<String, String>();
+            cl.javaProperties = new TreeMap<>();
             for (Entry<String, String> e : javaProperties.entrySet()) {
                 cl.javaProperties.put(e.getKey(), e.getValue());
             }
         }
+        cl.m_missingHostCount = m_missingHostCount;
 
         return cl;
     }
@@ -201,24 +205,6 @@ public class CommandLine extends VoltDB.Configuration
 
     public CommandLine rejoinTest(boolean rejoinTest) {
         m_isRejoinTest = rejoinTest;
-        return this;
-    }
-
-    public CommandLine isReplica(boolean isReplica)
-    {
-        if (isReplica)
-        {
-            m_replicationRole = ReplicationRole.REPLICA;
-        }
-        else
-        {
-            m_replicationRole = ReplicationRole.NONE;
-        }
-        return this;
-    }
-
-    public CommandLine replicaMode(ReplicationRole replicaMode) {
-        m_replicationRole = replicaMode;
         return this;
     }
 
@@ -344,6 +330,8 @@ public class CommandLine extends VoltDB.Configuration
 
     String voltFilePrefix = "";
     public CommandLine voltFilePrefix(String voltFilePrefix) {
+        if (m_newCli) return this;
+
         this.voltFilePrefix = voltFilePrefix;
         return this;
     }
@@ -485,7 +473,7 @@ public class CommandLine extends VoltDB.Configuration
     public CommandLine setJavaProperty(String property, String value)
     {
         if (javaProperties == null) {
-            javaProperties = new TreeMap<String, String>();
+            javaProperties = new TreeMap<>();
         }
         javaProperties.put(property, value);
         return this;
@@ -534,7 +522,7 @@ public class CommandLine extends VoltDB.Configuration
 
     // Return a command line list compatible with ProcessBuilder.command()
     public List<String> createCommandLine() {
-        List<String> cmdline = new ArrayList<String>(50);
+        List<String> cmdline = new ArrayList<>(50);
         cmdline.add(javaExecutable);
         cmdline.add("-XX:+HeapDumpOnOutOfMemoryError");
         cmdline.add("-Dsun.net.inetaddr.ttl=300");
@@ -562,7 +550,6 @@ public class CommandLine extends VoltDB.Configuration
         cmdline.add("-XX:CMSInitiatingOccupancyFraction=75");
         cmdline.add("-XX:+UseCMSInitiatingOccupancyOnly");
         cmdline.add("-XX:+CMSClassUnloadingEnabled");
-        cmdline.add("-XX:PermSize=64m");
 
         /*
          * Have RMI not invoke System.gc constantly
@@ -590,10 +577,11 @@ public class CommandLine extends VoltDB.Configuration
         if (includeTestOpts)
         {
             cmdline.add("-DLOG_SEGMENT_SIZE=8");
-            cmdline.add("-DVoltFilePrefix=" + voltFilePrefix);
+            if (!m_newCli) {
+                cmdline.add("-DVoltFilePrefix=" + voltFilePrefix);
+            }
             cmdline.add("-ea");
             cmdline.add("-XX:MaxDirectMemorySize=2g");
-            cmdline.add("-XX:-UseSplitVerifier");
         }
         else
         {
@@ -611,6 +599,15 @@ public class CommandLine extends VoltDB.Configuration
             cmdline.add("-Dvolt.rmi.server.hostname=" + jmxHost);
         }
 
+        // add default keystore, truststore
+        if (m_sslEnable) {
+            cmdline.add("-Djavax.net.ssl.keyStore=keystore");
+            cmdline.add("-Djavax.net.ssl.keyStorePassword=password");
+            cmdline.add("-Djavax.net.ssl.trustStore=keystore");
+            cmdline.add("-Djavax.net.ssl.trustStorePassword=password");
+        }
+
+
         if (javaProperties != null) {
             for (Entry<String, String> e : javaProperties.entrySet()) {
                 if (e.getValue() != null) {
@@ -626,13 +623,16 @@ public class CommandLine extends VoltDB.Configuration
             cmdline.add("-Xdebug");
             cmdline.add("-agentlib:jdwp=transport=dt_socket,address=" + debugPort + ",server=y,suspend=n");
         }
+
+
         //
         // Process JVM options passed through the VOLTDB_OPTS environment variable
         //
-        List<String> additionalJvmOptions = new ArrayList<String>();
+        List<String> additionalJvmOptions = new ArrayList<>();
         String nonJvmOptions = AdditionalJvmOptionsProcessor
                 .getJvmOptionsFromVoltDbOptsEnvironmentVariable(additionalJvmOptions);
         cmdline.addAll(additionalJvmOptions);
+
 
         //
         // VOLTDB main() parameters
@@ -644,24 +644,30 @@ public class CommandLine extends VoltDB.Configuration
             cmdline.add("safemode");
         }
 
+        if (m_startAction == StartAction.PROBE && m_enableAdd) {
+            cmdline.add("enableadd");
+        }
+
+        if (m_sslEnable) {
+            cmdline.add("enableSSL");
+        }
+
+        if (m_sslExternal) {
+            cmdline.add("externalSSL");
+        }
+
         cmdline.add("host");
         if (!m_coordinators.isEmpty()) {
-            cmdline.add(m_coordinators.first());
+            cmdline.add(Joiner.on(',').skipNulls().join(m_coordinators));
         } else {
             cmdline.add(m_leader);
         }
         if (jarFileName() != null) {
             cmdline.add("catalog"); cmdline.add(jarFileName());
         }
-        if (pathToDeployment() != null) {
+        //Add deployment if its not probe
+        if (pathToDeployment() != null && m_startAction != StartAction.PROBE) {
             cmdline.add("deployment"); cmdline.add(pathToDeployment());
-        }
-
-        // rejoin has no replication role
-        if (!m_startAction.doesRejoin()) {
-            if (m_replicationRole == ReplicationRole.REPLICA) {
-                cmdline.add("replica");
-            }
         }
 
         if (includeTestOpts)
@@ -697,6 +703,9 @@ public class CommandLine extends VoltDB.Configuration
         {
             cmdline.add("externalinterface"); cmdline.add(m_externalInterface);
         }
+        if (m_httpPort != Constants.HTTP_PORT_DISABLED) {
+            cmdline.add("httpport"); cmdline.add(Integer.toString(m_httpPort));
+        }
 
         if (m_forceVoltdbCreate)
         {
@@ -705,6 +714,10 @@ public class CommandLine extends VoltDB.Configuration
 
         if (m_isEnterprise) {
             cmdline.add("license"); cmdline.add(m_pathToLicense);
+        }
+
+        if (m_userSchema != null) {
+            cmdline.add("schema"); cmdline.add(m_userSchema.getAbsolutePath());
         }
 
         if (customCmdLn != null && !customCmdLn.trim().isEmpty())
@@ -748,16 +761,28 @@ public class CommandLine extends VoltDB.Configuration
             cmdline.add("paused");
         }
 
-        cmdline.add("mesh"); cmdline.add(Joiner.on(',').skipNulls().join(m_coordinators));
+        if (m_sitesperhost != VoltDB.UNDEFINED) {
+            cmdline.add("sitesperhost");
+            cmdline.add(Integer.toString(m_sitesperhost));
+        }
 
+        //Add mesh and hostcount for probe only.
         if (m_startAction == StartAction.PROBE) {
+            cmdline.add("mesh"); cmdline.add(Joiner.on(',').skipNulls().join(m_coordinators));
             cmdline.add("hostcount"); cmdline.add(Integer.toString(m_hostCount));
         }
 
-        if (m_startAction == StartAction.PROBE || m_startAction == StartAction.INITIALIZE) {
+        if (!m_startAction.isLegacy()) {
             cmdline.add("voltdbroot"); cmdline.add(m_voltdbRoot.getPath());
         }
 
+        if (m_placementGroup != null) {
+            cmdline.add("placementgroup"); cmdline.add(m_placementGroup);
+        }
+
+        if ( m_missingHostCount > 0) {
+            cmdline.add("missing"); cmdline.add(Integer.toString(m_missingHostCount));
+        }
         return cmdline;
     }
 
@@ -815,7 +840,7 @@ public class CommandLine extends VoltDB.Configuration
          * @return an argument array representing the specified command line.
          */
         public static String[] tokenize(String commandLine) {
-            List<String> resultBuffer = new java.util.ArrayList<String>();
+            List<String> resultBuffer = new java.util.ArrayList<>();
 
             if (commandLine != null) {
                 int z = commandLine.length();
@@ -878,7 +903,7 @@ public class CommandLine extends VoltDB.Configuration
         /**
          * Options which may not be specified in VOLTDB_OPTS
          */
-        static final Set<String> mayNotSpecify = new HashSet<String>(
+        static final Set<String> mayNotSpecify = new HashSet<>(
                 Arrays.<String>asList(
                         "-cp",
                         "-classpath",
@@ -895,7 +920,7 @@ public class CommandLine extends VoltDB.Configuration
          * Options that may be otherwise specified though documented
          * VoltDB options
          */
-        static final Set<String> mayOtherwiseSpecify = new HashSet<String>(
+        static final Set<String> mayOtherwiseSpecify = new HashSet<>(
                 Arrays.<String>asList(
                         "-Dlog4j.configuration",
                         "-Xm",
@@ -907,7 +932,7 @@ public class CommandLine extends VoltDB.Configuration
         /**
          * Options that have a follow up that needs to be also ignored
          */
-        static final Set<String> requiresSkipNext = new HashSet<String>(
+        static final Set<String> requiresSkipNext = new HashSet<>(
                 Arrays.<String>asList(
                         "-cp",
                         "-classpath"
@@ -963,7 +988,7 @@ public class CommandLine extends VoltDB.Configuration
             }
 
             boolean skipNext = false;
-            List<String> nonJvmOptions = new ArrayList<String>();
+            List<String> nonJvmOptions = new ArrayList<>();
 
             for( String option: CommandLineTokenizer.tokenize(voltDbOpts)) {
                 if( skipNext) {
@@ -1017,4 +1042,20 @@ public class CommandLine extends VoltDB.Configuration
         }
     }
 
+    boolean m_newCli = false;
+    //Return true if we are going to run init and start.
+    boolean isNewCli() {
+        return m_newCli;
+    }
+    public void setNewCli(boolean flag) { m_newCli = flag; };
+
+    String m_placementGroup = "";
+    public void setPlacementGroup(String placementGroup) {
+        m_placementGroup = placementGroup;
+    }
+
+    int m_missingHostCount = 0;
+    public void setMissingHostCount(int missingHostCount) {
+        this.m_missingHostCount = missingHostCount;
+    }
 }

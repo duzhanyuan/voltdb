@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -34,7 +34,7 @@ public abstract class AbstractFormatterFactory implements BundleActivator {
      */
     @Override
     public final void start(BundleContext context) throws Exception {
-        context.registerService(this.getClass().getName(), this, null);
+        context.registerService(AbstractFormatterFactory.class, this, null);
     }
 
     @Override
@@ -48,5 +48,5 @@ public abstract class AbstractFormatterFactory implements BundleActivator {
      * @param props - the properties used for the construction of formatter.
      * @return formatter instance created with the importer id
      */
-    public abstract Formatter<?> create(String  formatName, Properties props);
+    public abstract Formatter create(String formatName, Properties props);
 }

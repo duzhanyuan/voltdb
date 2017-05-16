@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -132,7 +132,7 @@ public class AdHocMayhemThread extends BenchmarkThread {
     @Override
     public void run() {
         try {
-            client.callProcedure("SetupAdHocTables");
+            TxnId2Utils.doProcCall(client, "SetupAdHocTables");
         } catch (Exception e) {
             hardStop("SetupAdHocTables failed in AdHocMayhemThread. Will exit.", e);
         }

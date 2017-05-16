@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -16,6 +16,7 @@
  */
 package org.voltdb;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ScheduledExecutorService;
@@ -27,9 +28,11 @@ import org.voltcore.utils.Pair;
 import org.voltdb.compiler.deploymentfile.DeploymentType;
 import org.voltdb.compiler.deploymentfile.PathsType;
 import org.voltdb.dtxn.SiteTracker;
+import org.voltdb.iv2.Cartographer;
 import org.voltdb.iv2.SpScheduler.DurableUniqueIdListener;
 import org.voltdb.licensetool.LicenseApi;
 import org.voltdb.settings.ClusterSettings;
+import org.voltdb.snmp.SnmpTrapSender;
 
 import com.google_voltpatches.common.util.concurrent.ListenableFuture;
 import com.google_voltpatches.common.util.concurrent.ListeningExecutorService;
@@ -65,13 +68,17 @@ public interface VoltDBInterface
     public String getExportOverflowPath();
     public String getDROverflowPath();
 
-    public String getPath(String name);
-
+    public boolean isBare();
     /**
      * Initialize all the global components, then initialize all the m_sites.
      * @param config Configuration from command line.
      */
     public void initialize(VoltDB.Configuration config);
+    /**
+     * CLI entry point for getting config from VoltDB
+     * @param config Configuration from command line.
+     */
+    public void cli(VoltDB.Configuration config);
 
     /**
      * Start all the site's event loops. That's it.
@@ -87,6 +94,17 @@ public interface VoltDBInterface
      */
     public boolean shutdown(Thread mainSiteThread) throws InterruptedException;
 
+    /**
+     * Check if the host is in prepare-shutting down state.
+     */
+    public boolean isPreparingShuttingdown();
+
+    /**
+     * Set the host to be in shutting down state.When a host is in teh state of being shut down.
+     * All reads and writes except the system stored procedures which are allowed as
+     *specified in SystemProcedureCatalog will be blocked.
+     */
+    public void setShuttingdown(boolean shuttingdown);
     boolean isMpSysprocSafeToExecute(long txnId);
 
     public void startSampler();
@@ -109,7 +127,7 @@ public interface VoltDBInterface
     public BackendTarget getBackendTargetType();
     public String getLocalMetadata();
     public SiteTracker getSiteTrackerForSnapshot();
-
+    public Cartographer getCartograhper();
     public void loadLegacyPathProperties(DeploymentType deployment) throws IOException;
 
     /**
@@ -117,8 +135,9 @@ public interface VoltDBInterface
      *
      * @param xmlConfig The xml string containing the new logging configuration
      * @param currentTxnId  The transaction ID at which this method is called
+     * @param voltroot The VoltDB root path
      */
-    void logUpdate(String xmlConfig, long currentTxnId);
+    void logUpdate(String xmlConfig, long currentTxnId, File voltroot);
 
     /**
      * Updates the catalog context stored by this VoltDB without destroying the old one,
@@ -142,7 +161,10 @@ public interface VoltDBInterface
             long currentTxnId,
             long currentTxnTimestamp,
             byte[] deploymentBytes,
-            byte[] deploymentHash);
+            byte[] deploymentHash,
+            boolean requireCatalogDiffCmdsApplyToEE,
+            boolean hasSchemaChange,
+            boolean requiresNewExportGeneration);
 
     /**
      * Updates the cluster setting of this VoltDB
@@ -200,7 +222,7 @@ public interface VoltDBInterface
 
     public OperationMode getStartMode();
 
-    public void setReplicationRole(ReplicationRole role);
+    public void promoteToMaster();
 
     public ReplicationRole getReplicationRole();
 
@@ -284,10 +306,13 @@ public interface VoltDBInterface
      * Return the license api. This may be null in community editions!
      * @return License API based on edition.
      */
-     public LicenseApi getLicenseApi();
-     //Return JSON string represenation of license information.
-     public String getLicenseInformation();
-
+    public LicenseApi getLicenseApi();
+    //Return JSON string represenation of license information.
+    public String getLicenseInformation();
 
     public <T> ListenableFuture<T> submitSnapshotIOWork(Callable<T> work);
+
+    public SnmpTrapSender getSnmpTrapSender();
+
+    public void swapTables(String oneTable, String otherTable);
 }

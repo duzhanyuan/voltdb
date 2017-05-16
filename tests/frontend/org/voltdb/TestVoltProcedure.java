@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -51,17 +51,17 @@
 package org.voltdb;
 
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
 import java.util.Date;
+
+import junit.framework.TestCase;
 
 import org.voltcore.utils.CoreUtils;
 import org.voltdb.VoltTable.ColumnInfo;
 import org.voltdb.client.ClientResponse;
 import org.voltdb.types.TimestampType;
-
-import junit.framework.TestCase;
-import static org.mockito.Mockito.mock;
 
 public class TestVoltProcedure extends TestCase {
     static class DateProcedure extends NullProcedureWrapper {
@@ -421,7 +421,7 @@ public class TestVoltProcedure extends TestCase {
         ClientResponse r = call(LargeNumberOfTablesProc.class);
         assertEquals(ClientResponse.GRACEFUL_FAILURE, r.getStatus());
         System.out.println(r.getStatusString());
-        assertTrue(r.getStatusString().contains("Exceeded  maximum number of VoltTables"));
+        assertTrue(r.getStatusString().contains("Exceeded maximum number of VoltTables"));
     }
 
     public void testNegativeWiderType() {
@@ -456,13 +456,13 @@ public class TestVoltProcedure extends TestCase {
             runner.setupTransaction(null);
             runner.call(params.toArray());
             statsRow = agent.m_source.getStatsRows(false, 0L);
-            assertEquals(statsRow[0][6], new Long(ii));
+            assertEquals(statsRow[0][7], new Long(ii));
         }
-        assertTrue(((Long)statsRow[0][6]).longValue() > 0L);
         assertTrue(((Long)statsRow[0][7]).longValue() > 0L);
-        assertFalse(statsRow[0][8].equals(0));
+        assertTrue(((Long)statsRow[0][8]).longValue() > 0L);
         assertFalse(statsRow[0][9].equals(0));
-        assertTrue(((Long)statsRow[0][9]) > 0L);
+        assertFalse(statsRow[0][10].equals(0));
+        assertTrue(((Long)statsRow[0][10]) > 0L);
     }
 
     public void testGetClusterId() {
@@ -507,6 +507,15 @@ public class TestVoltProcedure extends TestCase {
             m_source = source;
             m_selector = selector;
             m_catalogId = catalogId;
+        }
+
+        @Override
+        public ProcedureStatsCollector registerProcedureStatsSource(long catalogId, ProcedureStatsCollector source) {
+            m_source = source;
+            m_selector = StatsSelector.PROCEDURE;
+            m_catalogId = catalogId;
+
+            return source;
         }
     }
 }

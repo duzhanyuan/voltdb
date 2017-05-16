@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -29,29 +29,34 @@ import org.voltdb.messaging.CompleteTransactionResponseMessage;
 import org.voltdb.messaging.FragmentTaskMessage;
 import org.voltdb.messaging.Iv2InitiateTaskMessage;
 import org.voltdb.rejoin.TaskLog;
+import org.voltdb.utils.VoltTrace;
 
 public class CompleteTransactionTask extends TransactionTask
 {
     final private Mailbox m_initiator;
     final private CompleteTransactionMessage m_completeMsg;
-    final private PartitionDRGateway m_drGateway;
 
     public CompleteTransactionTask(Mailbox initiator,
                                    TransactionState txnState,
                                    TransactionTaskQueue queue,
-                                   CompleteTransactionMessage msg,
-                                   PartitionDRGateway drGateway)
+                                   CompleteTransactionMessage msg)
     {
         super(txnState, queue);
         m_initiator = initiator;
         m_completeMsg = msg;
-        m_drGateway = drGateway;
     }
 
     @Override
     public void run(SiteProcedureConnection siteConnection)
     {
         hostLog.debug("STARTING: " + this);
+        final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.SPSITE);
+        if (traceLog != null) {
+            traceLog.add(() -> VoltTrace.beginDuration("execcompletetxn",
+                                                       "txnId", TxnEgo.txnIdToString(getTxnId()),
+                                                       "partition", Integer.toString(siteConnection.getCorrespondingPartitionId())));
+        }
+
         if (!m_txnState.isReadOnly()) {
             // the truncation point token SHOULD be part of m_txn. However, the
             // legacy interaces don't work this way and IV2 hasn't changed this
@@ -66,7 +71,7 @@ public class CompleteTransactionTask extends TransactionTask
             doCommonSPICompleteActions();
 
             // Log invocation to DR
-            logToDR();
+            logToDR(siteConnection.getDRGateway());
             hostLog.debug("COMPLETE: " + this);
         }
         else
@@ -77,6 +82,10 @@ public class CompleteTransactionTask extends TransactionTask
             // for the restarted fragments.
             m_txnState.setBeginUndoToken(Site.kInvalidUndoToken);
             hostLog.debug("RESTART: " + this);
+        }
+
+        if (traceLog != null) {
+            traceLog.add(VoltTrace::endDuration);
         }
 
         final CompleteTransactionResponseMessage resp = new CompleteTransactionResponseMessage(m_completeMsg);
@@ -145,17 +154,17 @@ public class CompleteTransactionTask extends TransactionTask
         if (!m_completeMsg.isRestart()) {
             // this call does the right thing with a null TransactionTaskQueue
             doCommonSPICompleteActions();
-            logToDR();
+            logToDR(siteConnection.getDRGateway());
         }
         else {
             m_txnState.setBeginUndoToken(Site.kInvalidUndoToken);
         }
     }
 
-    private void logToDR()
+    private void logToDR(PartitionDRGateway drGateway)
     {
         // Log invocation to DR
-        if (m_drGateway != null && !m_txnState.isForReplay() && !m_txnState.isReadOnly() &&
+        if (drGateway != null && !m_txnState.isForReplay() && !m_txnState.isReadOnly() &&
             !m_completeMsg.isRollback())
         {
             FragmentTaskMessage fragment = (FragmentTaskMessage) m_txnState.getNotice();
@@ -166,7 +175,7 @@ public class CompleteTransactionTask extends TransactionTask
                               "fragment: " + fragment.toString());
             }
             StoredProcedureInvocation invocation = initiateTask.getStoredProcedureInvocation().getShallowCopy();
-            m_drGateway.onSuccessfulMPCall(m_txnState.m_spHandle,
+            drGateway.onSuccessfulMPCall(m_txnState.m_spHandle,
                     m_txnState.txnId,
                     m_txnState.uniqueId,
                     m_completeMsg.getHash(),

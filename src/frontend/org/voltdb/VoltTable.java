@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -1527,19 +1527,19 @@ public final class VoltTable extends VoltTableRow implements JSONString {
                 }
                 else {
                     if (colType == VoltType.VARBINARY) {
-                    valueStr = Encoder.hexEncode((byte[]) value);
+                        valueStr = Encoder.hexEncode((byte[]) value);
                         // crop long varbinaries
                         if (valueStr.length() > MAX_PRINTABLE_CHARS) {
                             valueStr = valueStr.substring(0, MAX_PRINTABLE_CHARS - ELLIPSIS.length()) + ELLIPSIS;
-                }
+                        }
                     }
-                else {
-                    valueStr = value.toString();
-                }
+                    else {
+                        valueStr = value.toString();
+                    }
                 }
                 sb.append(pad).append(String.format(fmt[i], valueStr));
                 pad = " ";
-                }
+            }
             sb.append("\n");
         }
 
@@ -1561,14 +1561,14 @@ public final class VoltTable extends VoltTableRow implements JSONString {
             js.object();
 
             // status code (1 byte)
-            js.key(JSON_STATUS_KEY).value(getStatusCode());
+            js.keySymbolValuePair(JSON_STATUS_KEY, getStatusCode());
 
             // column schema
             js.key(JSON_SCHEMA_KEY).array();
             for (int i = 0; i < getColumnCount(); i++) {
                 js.object();
-                js.key(JSON_NAME_KEY).value(getColumnName(i));
-                js.key(JSON_TYPE_KEY).value(getColumnType(i).getValue());
+                js.keySymbolValuePair(JSON_NAME_KEY, getColumnName(i));
+                js.keySymbolValuePair(JSON_TYPE_KEY, getColumnType(i).getValue());
                 js.endObject();
             }
             js.endArray();
@@ -1894,6 +1894,45 @@ public final class VoltTable extends VoltTableRow implements JSONString {
         buf.put(dup);
     }
 
+    public byte[] buildReusableDependenyResult() {
+        ByteBuffer dup = m_buffer.duplicate();
+        ByteBuffer responseBuf = ByteBuffer.allocate(dup.limit());
+        dup.position(0);
+        responseBuf.put(dup);
+        return responseBuf.array();
+    }
+
+    private void initFromRawBuffer() {
+        m_buffer.position(m_buffer.limit());
+
+        // m_rowStart represents an offset to the start of row data,
+        // but the serialization is the non-inclusive length of the header,
+        // so add 4 bytes.
+        m_rowStart = m_buffer.getInt(0) + 4;
+
+        m_colCount = m_buffer.getShort(5);
+        m_rowCount = m_buffer.getInt(m_rowStart);
+
+        assert(verifyTableInvariants());
+    }
+
+    void initFromByteArray(byte[] byteArray, int position, int len) {
+        m_buffer = ByteBuffer.wrap(byteArray, position, len).asReadOnlyBuffer();
+        initFromRawBuffer();
+    }
+
+    public final void convertToHeapBuffer() {
+        if (m_buffer.isDirect()) {
+            // Either this was allocated by the stored procedure as a direct buffer or this
+            // is cached from the EE. If the second, we need to make a copy so the EE can
+            // reuse the buffer for the next stored procedure.
+            ByteBuffer heapBuffer = ByteBuffer.allocate(m_buffer.limit());
+            m_buffer.position(0);
+            heapBuffer.put(m_buffer);
+            m_buffer = heapBuffer;
+        }
+    }
+
     void initFromBuffer(ByteBuffer buf) {
         // Note: some of the snapshot and save/restore code makes assumptions
         // about the binary layout of tables.
@@ -1908,18 +1947,7 @@ public final class VoltTable extends VoltTableRow implements JSONString {
         m_buffer = buf.slice().asReadOnlyBuffer();
         buf.limit(startLimit);
         buf.position(buf.position() + len);
-
-        m_buffer.position(m_buffer.limit());
-
-        // rowstart represents and offset to the start of row data,
-        //  but the serialization is the non-inclusive length of the header,
-        //  so add two bytes.
-        m_rowStart = m_buffer.getInt(0) + 4;
-
-        m_colCount = m_buffer.getShort(5);
-        m_rowCount = m_buffer.getInt(m_rowStart);
-
-        assert(verifyTableInvariants());
+        initFromRawBuffer();
     }
 
     /**

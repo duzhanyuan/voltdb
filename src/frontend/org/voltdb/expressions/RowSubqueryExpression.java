@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -44,11 +44,11 @@ public class RowSubqueryExpression extends AbstractSubqueryExpression {
         assert(args != null);
         m_args = args;
         // replace the TVE and aggregated expressions from the IN List with the correlated parameters
-        List<AbstractExpression> pves = new ArrayList<AbstractExpression>();
+        List<AbstractExpression> pves = new ArrayList<>();
         for (AbstractExpression expr : args) {
             collectParameterValueExpressions(expr, pves);
         }
-        String tableName = "VOLT_TEMP_TABLE_" + m_subqueryId;
+        String tableName = AbstractParsedStmt.TEMP_TABLE_NAME + "_" + m_subqueryId;
         m_subqueryNode = new TupleScanPlanNode(tableName, pves);
     }
 

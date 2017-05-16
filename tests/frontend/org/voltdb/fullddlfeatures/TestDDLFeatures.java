@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -23,9 +23,15 @@
 
 package org.voltdb.fullddlfeatures;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
 import java.net.URL;
 import java.net.URLDecoder;
 
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.voltdb.AdhocDDLTestBase;
 import org.voltdb.VoltDB;
@@ -45,7 +51,7 @@ public class TestDDLFeatures extends AdhocDDLTestBase {
 
     VoltProjectBuilder builder = new VoltProjectBuilder();
 
-    @Override
+    @Before
     public void setUp() throws Exception
     {
         final URL url = TestDDLFeatures.class.getResource("fullDDL.sql");
@@ -63,7 +69,7 @@ public class TestDDLFeatures extends AdhocDDLTestBase {
         startSystem(config);
     }
 
-    @Override
+    @After
     public void tearDown() throws Exception
     {
         teardownSystem();
@@ -284,7 +290,7 @@ public class TestDDLFeatures extends AdhocDDLTestBase {
 
         // Test for T22
         assertTrue(findTableInSystemCatalogResults("T22"));
-        assertEquals(indexedColumnCount("T22"), 4);
+        assertEquals(8, indexedColumnCount("T22"));
 
         // Test for T23
         assertTrue(findTableInSystemCatalogResults("T23"));
@@ -759,6 +765,16 @@ public class TestDDLFeatures extends AdhocDDLTestBase {
         assertTrue(isColumnPartitionColumn("T61", "C3"));
         assertTrue(verifyTableColumnType("T61", "C3", "INTEGER"));
         assertFalse(isDRedTable("T61"));
+    }
+
+    @Test
+    public void testINETFunctions() throws Exception {
+        assertTrue(findTableInSystemCatalogResults("T22"));
+
+        assertTrue(findIndexInSystemCatalogResults("ENG_8168_INDEX_USES_INET_ATON"));
+        assertTrue(findIndexInSystemCatalogResults("ENG_8168_INDEX_USES_INET_NTOA"));
+        assertTrue(findIndexInSystemCatalogResults("ENG_8168_INDEX_USES_INET6_ATON"));
+        assertTrue(findIndexInSystemCatalogResults("ENG_8168_INDEX_USES_INET6_NTOA"));
     }
 
     @Test

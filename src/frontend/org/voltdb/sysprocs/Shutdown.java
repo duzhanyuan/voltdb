@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -60,11 +60,13 @@ public class Shutdown extends VoltSystemProcedure {
     };
 
     @Override
-    public void init() {
-        registerPlanFragment(SysProcFragmentId.PF_shutdownSync);
-        registerPlanFragment(SysProcFragmentId.PF_shutdownSyncDone);
-        registerPlanFragment(SysProcFragmentId.PF_shutdownCommand);
-        registerPlanFragment(SysProcFragmentId.PF_procedureDone);
+    public long[] getPlanFragmentIds() {
+        return new long[]{
+            SysProcFragmentId.PF_shutdownSync,
+            SysProcFragmentId.PF_shutdownSyncDone,
+            SysProcFragmentId.PF_shutdownCommand,
+            SysProcFragmentId.PF_procedureDone
+        };
     }
 
     @Override
@@ -79,12 +81,12 @@ public class Shutdown extends VoltSystemProcedure {
                 m_failsafe.start();
                 new VoltLogger("HOST").warn("VoltDB shutdown operation requested and in progress.  Cluster will terminate shortly.");
             }
-            return new DependencyPair(DEP_shutdownSync,
-                    new VoltTable(new ColumnInfo[] { new ColumnInfo("HA", VoltType.STRING) } ));
+            VoltTable rslt = new VoltTable(new ColumnInfo[] { new ColumnInfo("HA", VoltType.STRING) });
+            return new DependencyPair.TableDependencyPair(DEP_shutdownSync, rslt);
         }
         else if (fragmentId == SysProcFragmentId.PF_shutdownSyncDone) {
-            return new DependencyPair(DEP_shutdownSyncDone,
-                    new VoltTable(new ColumnInfo[] { new ColumnInfo("HA", VoltType.STRING) } ));
+            VoltTable rslt = new VoltTable(new ColumnInfo[] { new ColumnInfo("HA", VoltType.STRING) });
+            return new DependencyPair.TableDependencyPair(DEP_shutdownSyncDone, rslt);
         }
         else if (fragmentId == SysProcFragmentId.PF_shutdownCommand) {
             Thread shutdownThread = new Thread() {

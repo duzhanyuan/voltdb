@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,19 +17,69 @@
 
 package org.voltdb;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+
+import org.voltcore.utils.Pair;
+import org.voltdb.ProducerDRGateway.MeshMemberInfo;
+
 // Interface through which the outside world can interact with the consumer side
 // of DR. Currently, there's not much to do here, since the subsystem is
 // largely self-contained
 public interface ConsumerDRGateway extends Promotable {
 
-    public abstract void updateCatalog(CatalogContext catalog);
+    /**
+     * Notify the consumer of catalog updates.
+     * @param catalog             The new catalog.
+     * @param newConnectionSource The new connection source if changed, or null if not.
+     * @param snapshotSource The cluster from which this joiner cluster should request snapshot.
+     *        Use -1 if there is no preferred snapshot source. If this joiner cluster has already
+     *        received snapshot, this change will have no effect.
+     */
+    void updateCatalog(CatalogContext catalog, String newConnectionSource, byte snapshotSource);
 
-    public abstract boolean isActive();
+    void swapTables(final Set<Pair<String, Long>> swappedTables);
 
-    public abstract void initialize(boolean resumeReplication);
+    Map<Byte, DRRoleStats.State> getStates();
 
-    public abstract void shutdown(boolean blocking) throws InterruptedException;
+    /**
+     * If this cluster was a joiner (at some point) dataSourceCluster will not be -1. If this is the case
+     * the trackers for this clusterId must exist. If they don't exist, this cluster did not finish loading
+     * the snapshot as a joiner.
+     * @param dataSourceCluster
+     * @param expectedClusterMembers
+     */
+    void setInitialConversationMembership(byte dataSourceCluster, List<MeshMemberInfo> expectedClusterMembers);
 
-    public void restart() throws InterruptedException;
+    void initialize(boolean resumeReplication);
 
+    void shutdown(final boolean blocking) throws InterruptedException, ExecutionException;
+
+    void restart() throws InterruptedException, ExecutionException;
+
+    DRConsumerMpCoordinator getDRConsumerMpCoordinator();
+
+    void clusterUnrecoverable(byte clusterId, Throwable t);
+
+    void queueStartCursors(final MeshMemberInfo newMeshMember);
+
+    void producerTopologyUpdated(final MeshMemberInfo existingCluster);
+
+    void startConsumerDispatcher(final MeshMemberInfo member);
+
+    void deactivateConsumerDispatcher(byte clusterId);
+
+    void addLocallyLedPartition(int partitionId);
+
+    boolean isSafeForReset(byte clusterId);
+
+    void pauseConsumerDispatcher(byte clusterId);
+
+    void resumeConsumerDispatcher(byte clusterId);
+
+    void resetDrAppliedTracker(byte clusterId);
+
+    void populateEmptyTrackersIfNeeded(byte producerClusterId, int producerPartitionCount);
 }

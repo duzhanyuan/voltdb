@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -336,7 +336,7 @@ public class ChannelDistributer implements ChannelChangeCallback {
     /**
      * Register channels for the given importer. If they match to what is already registered
      * then nothing is done. Before registering channels, you need to register a callback
-     * handler for channel assignments {@link #registerCallback(String, Object)}
+     * handler for channel assignments {@link #registerCallback(String, ChannelChangeCallback)}
      *
      * @param importer importer designation
      * @param uris list of channel URIs
@@ -1255,6 +1255,7 @@ public class ChannelDistributer implements ChannelChangeCallback {
                             oldspecs, nspecs, stat.getVersion()
                             );
                     for (ImporterChannelAssignment cassigns: assignment.getImporterChannelAssignments()) {
+                        if (m_done.get()) break;
                         m_eb.post(cassigns);
                     }
                     if (!assignment.getRemoved().isEmpty()) {

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -95,6 +95,13 @@ JNITopend::JNITopend(JNIEnv *env, jobject caller) : m_jniEnv(env), m_javaExecuti
     if (m_nextDependencyMID == NULL) {
         m_jniEnv->ExceptionDescribe();
         assert(m_nextDependencyMID != 0);
+        throw std::exception();
+    }
+
+    m_traceLogMID = m_jniEnv->GetMethodID(jniClass, "traceLog", "(ZLjava/lang/String;Ljava/lang/String;)V");
+    if (m_traceLogMID == NULL) {
+        m_jniEnv->ExceptionDescribe();
+        assert(m_traceLogMID != 0);
         throw std::exception();
     }
 
@@ -267,6 +274,22 @@ int JNITopend::loadNextDependency(int32_t dependencyId, voltdb::Pool *stringPool
     }
     else {
         return 0;
+    }
+}
+
+void JNITopend::traceLog(bool isBegin, const char *name, const char *args) {
+    jstring nameStr = m_jniEnv->NewStringUTF(name);
+    jstring argsStr = m_jniEnv->NewStringUTF(args);
+
+    m_jniEnv->CallVoidMethod(m_javaExecutionEngine, m_traceLogMID,
+                             isBegin ? JNI_TRUE : JNI_FALSE, nameStr, argsStr);
+
+    m_jniEnv->DeleteLocalRef(nameStr);
+    m_jniEnv->DeleteLocalRef(argsStr);
+
+    if (m_jniEnv->ExceptionCheck()) {
+        m_jniEnv->ExceptionDescribe();
+        throw std::exception();
     }
 }
 
@@ -479,7 +502,7 @@ int64_t JNITopend::pushDRBuffer(int32_t partitionId, StreamBlock *block) {
 
 static boost::shared_array<char> serializeToDirectByteBuffer(JNIEnv *jniEngine, Table *table, jobject &byteBuffer) {
     if (table) {
-        size_t serializeSize = table->getAccurateSizeToSerialize(false);
+        size_t serializeSize = table->getAccurateSizeToSerialize();
         boost::shared_array<char> backingArray(new char[serializeSize]);
         ReferenceSerializeOutput conflictSerializeOutput(backingArray.get(), serializeSize);
         table->serializeToWithoutTotalSize(conflictSerializeOutput);

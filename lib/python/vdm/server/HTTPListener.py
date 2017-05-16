@@ -1,5 +1,5 @@
 # This file is part of VoltDB.
-# Copyright (C) 2008-2016 VoltDB Inc.
+# Copyright (C) 2008-2017 VoltDB Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -44,6 +44,7 @@ from flask_logging import Filter
 import Configuration
 import signal
 import thread
+
 
 filter_log = Filter('/api/1.0/', 'GET')
 
@@ -167,12 +168,6 @@ def map_deployment(request, database_id):
     if 'cluster' in request.json and 'kfactor' in request.json['cluster']:
         deployment['cluster']['kfactor'] = request.json['cluster']['kfactor']
 
-    if 'admin-mode' in request.json and 'adminstartup' in request.json['admin-mode']:
-        deployment['admin-mode']['adminstartup'] = request.json['admin-mode']['adminstartup']
-
-    if 'admin-mode' in request.json and 'port' in request.json['admin-mode']:
-        deployment['admin-mode']['port'] = request.json['admin-mode']['port']
-
     if 'commandlog' in request.json and 'adminstartup' in request.json['commandlog']:
         deployment['commandlog']['adminstartup'] = request.json['commandlog']['adminstartup']
 
@@ -209,11 +204,6 @@ def map_deployment(request, database_id):
 
     if 'partition-detection' in request.json and 'enabled' in request.json['partition-detection']:
         deployment['partition-detection']['enabled'] = request.json['partition-detection']['enabled']
-
-    if 'partition-detection' in request.json and 'snapshot' in request.json['partition-detection'] \
-            and 'prefix' in request.json['partition-detection']['snapshot']:
-        deployment['partition-detection']['snapshot']['prefix'] = \
-            request.json['partition-detection']['snapshot']['prefix']
 
     if 'paths' in request.json and 'commandlog' in request.json['paths'] and \
                     'path' in request.json['paths']['commandlog']:
@@ -444,11 +434,59 @@ def map_deployment(request, database_id):
             else:
                 deployment['dr']['listen'] = True
 
+            if 'role' in request.json['dr']:
+                deployment['dr']['role'] = request.json['dr']['role']
+
             if request.json['dr']:
                 if 'port' in request.json['dr']:
                     deployment['dr']['port'] = request.json['dr']['port']
                 else:
                     deployment['dr']['port'] = None
+
+    if 'snmp' in request.json:
+        if request.json['snmp']:
+            if 'snmp' not in deployment or ('snmp' in deployment and not deployment['snmp']):
+                deployment['snmp'] = {}
+
+            if 'enabled' in request.json['snmp'] and request.json['snmp']['enabled'] != '':
+                deployment['snmp']['enabled'] = request.json['snmp']['enabled']
+            else:
+                deployment['snmp']['enabled'] = True
+
+            if 'target' in request.json['snmp']:
+                deployment['snmp']['target'] = request.json['snmp']['target']
+
+            if 'community' in request.json['snmp']:
+                deployment['snmp']['community'] = request.json['snmp']['community']
+            else:
+                deployment['snmp']['community'] = 'public'
+
+            if 'username' in request.json['snmp']:
+                deployment['snmp']['username'] = request.json['snmp']['username']
+            else:
+                deployment['snmp']['username'] = None
+
+            if 'authprotocol' in request.json['snmp']:
+                deployment['snmp']['authprotocol'] = request.json['snmp']['authprotocol']
+            else:
+                deployment['snmp']['authprotocol'] = 'SHA'
+
+            if 'authkey' in request.json['snmp']:
+                deployment['snmp']['authkey'] = request.json['snmp']['authkey']
+            else:
+                deployment['snmp']['authkey'] = 'voltdbauthkey'
+
+            if 'privacyprotocol' in request.json['snmp']:
+                deployment['snmp']['privacyprotocol'] = request.json['snmp']['privacyprotocol']
+            else:
+                deployment['snmp']['privacyprotocol'] = 'AES'
+
+            if 'privacykey' in request.json['snmp']:
+                deployment['snmp']['privacykey'] = request.json['snmp']['privacykey']
+            else:
+                deployment['snmp']['privacykey'] = 'voltdbprivacykey'
+        else:
+            deployment['snmp'] = None
 
     return deployment
 
@@ -667,6 +705,7 @@ class Global:
     MODULE_PATH = ''
     DELETED_HOSTNAME = ''
     VOLT_SERVER_PATH = ''
+    DEFAULT_PATH = []
 
 
 class ServerAPI(MethodView):
@@ -758,7 +797,13 @@ class ServerAPI(MethodView):
             'internal-listener': request.json.get('internal-listener', "").strip().lstrip("0"),
             'http-listener': request.json.get('http-listener', "").strip().lstrip("0"),
             'placement-group': request.json.get('placement-group', "").strip(),
-            'isAdded': False
+            'isAdded': False,
+            'voltdbroot': request.json.get('voltdbroot', "").strip(),
+            'snapshots': request.json.get('snapshots', "").strip(),
+            'exportoverflow': request.json.get('exportoverflow', "").strip(),
+            'commandlog': request.json.get('commandlog', "").strip(),
+            'commandlogsnapshot': request.json.get('commandlogsnapshot', "").strip(),
+            'droverflow': request.json.get('droverflow', "").strip()
         }
 
         # Add server to the current database
@@ -884,6 +929,18 @@ class ServerAPI(MethodView):
             current_server['placement-group'] = \
                 str(request.json.get('placement-group', current_server['placement-group']))
             current_server['isAdded'] = current_server['isAdded']
+            current_server['voltdbroot'] = \
+                str(request.json.get('voltdbroot', current_server['voltdbroot']))
+            current_server['snapshots'] = \
+                str(request.json.get('snapshots', current_server['snapshots']))
+            current_server['exportoverflow'] = \
+                str(request.json.get('exportoverflow', current_server['exportoverflow']))
+            current_server['commandlog'] = \
+                str(request.json.get('commandlog', current_server['commandlog']))
+            current_server['commandlogsnapshot'] = \
+                str(request.json.get('commandlogsnapshot', current_server['commandlogsnapshot']))
+            current_server['droverflow'] = \
+                str(request.json.get('droverflow', current_server['droverflow']))
             sync_configuration()
             Configuration.write_configuration_file()
             return jsonify({'status': 200, 'statusString': 'OK', 'server': current_server})
@@ -1197,8 +1254,12 @@ class StartDatabaseAPI(MethodView):
             else:
                 is_pause = "false"
 
+            if 'force' in request.args:
+                is_force = request.args.get('force')
+            else:
+                is_force = "false"
             database = voltdbserver.VoltDatabase(database_id)
-            response = database.start_database(is_pause)
+            response = database.start_database(is_pause, is_force)
             return response
         except Exception, err:
             print traceback.format_exc()
@@ -1226,7 +1287,7 @@ class RecoverDatabaseAPI(MethodView):
                 pause = "false"
 
             database = voltdbserver.VoltDatabase(database_id)
-            response = database.start_database(True, pause)
+            response = database.start_database(pause, False)
             return response
         except Exception, err:
             print traceback.format_exc()
@@ -1290,15 +1351,49 @@ class StopServerAPI(MethodView):
             Status string indicating if the stop request was sent successfully
         """
 
+        try:
+            if 'force' in request.args:
+                force = request.args.get('force').lower()
+            else:
+                force = "false"
+
+            server = voltdbserver.VoltDatabase(database_id)
+            response = server.stop_server(server_id, force)
+            resp_json = json.loads(response.data)
+            if response.status_code == 500:
+                return make_response(jsonify({'status': 500, 'statusString': resp_json['statusString']}), 500)
+            else:
+                return make_response(jsonify({'status': 200, 'statusString': resp_json['statusString']}), 200)
+        except Exception, err:
+            print traceback.format_exc()
+            return make_response(jsonify({'status': 500, 'statusString': str(err)}),
+                                 500)
+
+
+class StopLocalServerAPI(MethodView):
+    """Class to handle request to stop a server."""
+
+    @staticmethod
+    def put(database_id):
+        """
+        Stops VoltDB database server on the local server
+        Args:
+            database_id (int): The id of the database that should be stopped
+        Returns:
+            Status string indicating if the stop request was sent successfully
+        """
+
         if 'force' in request.args:
             is_force = request.args.get('force').lower()
         else:
             is_force = 'false'
+        if 'id' in request.args:
+            sid = int(request.args.get('id'))
 
         if is_force == "false":
             try:
                 server = voltdbserver.VoltDatabase(database_id)
-                response = server.kill_server(server_id)
+                response = server.kill_server(sid)
                 if 'Connection broken' in response.data:
                     return make_response(jsonify({'status': 200, 'statusString': 'SUCCESS: Server shutdown '
                                                                                  'successfully.'}))
@@ -1311,7 +1406,7 @@ class StopServerAPI(MethodView):
         else:
             try:
                 server = voltdbserver.VoltDatabase(database_id)
-                response = server.stop_server(server_id)
+                response = server.stop_db_server(sid)
                 if 'Connection broken' in response:
                     return make_response(jsonify({'status': 200, 'statusString': 'SUCCESS: Server shutdown successfully.'}))
                 else:
@@ -1342,12 +1437,13 @@ class StartServerAPI(MethodView):
             else:
                 pause = "false"
 
-            if 'blocking' in request.args:
-                is_blocking = int(request.args.get('blocking'))
+            if 'force' in request.args:
+                is_force = request.args.get('force')
             else:
-                is_blocking = -1
+                is_force = "false"
+
             server = voltdbserver.VoltDatabase(database_id)
-            response = server.start_server(server_id, pause, False, is_blocking)
+            response = server.start_server(server_id, pause, is_force)
             resp_json = json.loads(response.data)
             if response.status_code == 500:
                 return make_response(jsonify({'status': 500, 'statusString': resp_json['statusString']}), 500)
@@ -1376,15 +1472,19 @@ class StartLocalServerAPI(MethodView):
             sid = -1
             if 'pause' in request.args:
                 pause = request.args.get('pause')
+            else:
+                pause = "false"
+
+            if 'force' in request.args:
+                force = request.args.get('force')
+            else:
+                force = "false"
 
             if 'id' in request.args:
                 sid = int(request.args.get('id'))
-            if 'blocking' in request.args:
-                is_blocking = int(request.args.get('blocking'))
-            else:
-                is_blocking = -1
+
             server = voltdbserver.VoltDatabase(database_id)
-            return server.check_and_start_local_server(sid, pause, database_id, False, is_blocking)
+            return server.check_and_start_local_server(sid, pause, database_id, force, False)
         except Exception, err:
             print traceback.format_exc()
             return make_response(jsonify({'status': 500, 'statusString': str(err)}),
@@ -1407,12 +1507,14 @@ class RecoverServerAPI(MethodView):
         try:
             sid = -1
             if 'pause' in request.args:
-                pause = request.args.get('pause')
+                is_pause = request.args.get('pause').lower()
+            else:
+                is_pause = "false"
 
             if 'id' in request.args:
                 sid = int(request.args.get('id'))
             server = voltdbserver.VoltDatabase(database_id)
-            response = server.check_and_start_local_server(sid, pause, database_id, True)
+            response = server.check_and_start_local_server(sid, is_pause, database_id, False)
             return response
         except Exception, err:
             print traceback.format_exc()
@@ -1434,7 +1536,7 @@ class AddServerAPI(MethodView):
         """
         try:
             server = voltdbserver.VoltDatabase(database_id)
-            response = server.start_server(server_id, 'false', False, -1, True)
+            response = server.start_server(server_id, 'false', 'false', True)
             resp_json = json.loads(response.data)
             if response.status_code == 500:
                 return make_response(jsonify({'status': '500', 'statusString': resp_json['statusString']}), 500)
@@ -1464,7 +1566,7 @@ class AddLocalServerAPI(MethodView):
             if 'id' in request.args:
                 sid = int(request.args.get('id'))
             server = voltdbserver.VoltDatabase(database_id)
-            return server.check_and_start_local_server(sid, 'False', database_id, False, -1, True)
+            return server.check_and_start_local_server(sid, 'false', database_id, 'false', True)
         except Exception, err:
             print traceback.format_exc()
             return make_response(jsonify({'status': 500, 'statusString': str(err)}),
@@ -1597,6 +1699,7 @@ class DatabaseDeploymentAPI(MethodView):
     @staticmethod
     def put(database_id):
         if 'application/json' in request.headers['Content-Type']:
+
             inputs = JsonInputs(request)
             if not inputs.validate():
                 return jsonify(status=401, statusString=inputs.errors)
@@ -1775,6 +1878,7 @@ def main(runner, amodule, config_dir, data_dir, server):
     global __IP__
     global __PORT__
 
+
     config_path = os.path.join(config_dir, 'voltdeploy.xml')
 
     arrServer = {}
@@ -1805,9 +1909,11 @@ def main(runner, amodule, config_dir, data_dir, server):
                              'enabled': True, 'external-interface': "", 'internal-interface': "",
                              'public-interface': "", 'client-listener': "", 'internal-listener': "",
                              'admin-listener': "", 'http-listener': "", 'replication-listener': "",
-                             'zookeeper-listener': "", 'placement-group': "", 'isAdded': False}
-
+                             'zookeeper-listener': "", 'placement-group': "", 'isAdded': False, 'voltdbroot': "",
+                             'snapshots': "", 'exportoverflow': "", 'commandlog': "",
+                             'commandlogsnapshot': "", 'droverflow': ""}
         Global.DATABASES[1] = {'id': 1, 'name': "Database", "members": [1]}
+
 
     Configuration.write_configuration_file()
 
@@ -1831,6 +1937,7 @@ def main(runner, amodule, config_dir, data_dir, server):
     VDM_VIEW = VdmAPI.as_view('vdm_api')
     ADD_SERVER_VIEW = AddServerAPI.as_view('add_server_api')
     ADD_LOCAL_SERVER_VIEW = AddLocalServerAPI.as_view('add_local_server_api')
+    STOP_LOCAL_SERVER_VIEW = StopLocalServerAPI.as_view('stop_local_server_api')
 
     APP.add_url_rule('/api/1.0/databases/<int:database_id>/servers/', strict_slashes=False,
                      view_func=SERVER_VIEW, methods=['GET', 'POST'])
@@ -1880,6 +1987,8 @@ def main(runner, amodule, config_dir, data_dir, server):
                      methods=['GET'])
     APP.add_url_rule('/api/1.0/databases/<int:database_id>/servers/add', strict_slashes=False,
                      view_func=ADD_LOCAL_SERVER_VIEW, methods=['PUT'])
+    APP.add_url_rule('/api/1.0/databases/<int:database_id>/servers/stop', strict_slashes=False,
+                     view_func=STOP_LOCAL_SERVER_VIEW, methods=['PUT'])
 
     log_file = os.path.join(Global.DATA_PATH, 'voltdeploy.log')
     if os.path.exists(log_file):

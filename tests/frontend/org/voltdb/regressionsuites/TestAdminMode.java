@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -25,19 +25,20 @@ package org.voltdb.regressionsuites;
 import java.io.IOException;
 import java.nio.channels.SocketChannel;
 
-import junit.framework.Test;
-
 import org.voltdb.BackendTarget;
 import org.voltdb.VoltTable;
 import org.voltdb.VoltType;
 import org.voltdb.client.Client;
 import org.voltdb.client.ClientConfig;
 import org.voltdb.client.ClientFactory;
+import org.voltdb.client.ClientImpl;
 import org.voltdb.client.ClientResponse;
 import org.voltdb.client.ConnectionUtil;
 import org.voltdb.client.ProcCallException;
 import org.voltdb.client.ProcedureCallback;
 import org.voltdb.compiler.VoltProjectBuilder;
+
+import junit.framework.Test;
 
 public class TestAdminMode extends RegressionSuite
 {
@@ -199,6 +200,10 @@ public class TestAdminMode extends RegressionSuite
         ClientConfig config = new ClientConfig();
         config.setProcedureCallTimeout(600000);
         final Client adminclient = ClientFactory.createClient(config);
+        if (((ClientImpl)adminclient).getSSLContext() != null) {
+            return;
+        }
+
         SocketChannel channel = getClientChannel();
 
         try {
@@ -354,7 +359,7 @@ public class TestAdminMode extends RegressionSuite
         assertTrue(success);
 
         // add this config to the set of tests to run
-        builder.addServerConfig(config);
+        builder.addServerConfig(config, false);
 
         return builder;
     }

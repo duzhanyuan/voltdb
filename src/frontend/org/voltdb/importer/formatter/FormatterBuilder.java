@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -43,7 +43,7 @@ public class FormatterBuilder<T> {
     /**
      * @return formatter instance created by its factory
      */
-    public Formatter<?> create(){
+    public Formatter create(){
         return m_formatterFcatory.create(m_formatterName, m_formatterProps);
     }
 

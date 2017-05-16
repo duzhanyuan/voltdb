@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -87,6 +87,7 @@ public class SQLParser extends SQLPatternFactory
             "SET" +                             // SET
             "\\s+.*\\z"                         // (end statement)
             );
+
     /**
      * Pattern: PARTITION PROCEDURE|TABLE ...
      *
@@ -172,12 +173,44 @@ public class SQLParser extends SQLPatternFactory
         ).compile("PAT_CREATE_PROCEDURE_FROM_SQL");
 
     /*
+     * CREATE FUNCTION <NAME> FROM METHOD <CLASS NAME>.<METHOD NAME>
+     *
+     * CREATE FUNCTION with the designated method from the given class.
+     *
+     * Capture groups:
+     *  (1) Function name
+     *  (2) The class name
+     *  (3) The method name
+     */
+    private static final Pattern PAT_CREATE_FUNCTION_FROM_METHOD =
+        SPF.statement(
+            SPF.token("create"), SPF.token("function"), SPF.capture(SPF.functionName()),
+            SPF.token("from"), SPF.token("method"),
+            SPF.capture(SPF.classPath()), SPF.dot().withFlags(ADD_LEADING_SPACE_TO_CHILD),
+            SPF.capture(SPF.functionName().withFlags(ADD_LEADING_SPACE_TO_CHILD))
+        ).compile("PAT_CREATE_FUNCTION_FROM_METHOD");
+
+    /*
+     * DROP FUNCTION <NAME> [IF EXISTS]
+     *
+     * Drop a user-defined function.
+     *
+     * Capture groups:
+     *  (1) Function name
+     *  (2) If exists
+     */
+    private static final Pattern PAT_DROP_FUNCTION =
+        SPF.statement(
+            SPF.token("drop"), SPF.token("function"), SPF.capture(SPF.functionName()),
+            SPF.optional(SPF.capture(SPF.clause(SPF.token("if"), SPF.token("exists"))))
+        ).compile("PAT_DROP_FUNCTION");
+
+    /*
      * CREATE PROCEDURE <NAME> [ <MODIFIER_CLAUSE> ... ] AS ### <PROCEDURE_CODE> ### LANGUAGE <LANGUAGE_NAME>
      *
      * CREATE PROCEDURE with inline implementation script, e.g. Groovy, statement regex
      * NB supports only unquoted table and column names
-     * The only supported language is GROOVY for now, but to avoid confusing with the
-     * other CREATE PROCEDURE ... AS variant match anything that has the block delimiters.
+     * This used to support GROOVY, but now will just offer a compile error.
      *
      * Capture groups:
      *  (1) Procedure name
@@ -290,8 +323,9 @@ public class SQLParser extends SQLPatternFactory
     private static final Pattern PAT_DROP_STREAM =
             SPF.statementLeader(
                     SPF.token("drop"), SPF.token("stream"), SPF.capture("name", SPF.databaseObjectName()),
-                    SPF.optional(SPF.clause(SPF.token("if"), SPF.token("exisit")))
+                    SPF.optional(SPF.clause(SPF.token("if"), SPF.token("exists")))
                     ).compile("PAT_DROP_STREAM");
+
     /**
      * NB supports only unquoted table names
      * Captures 1 group, the table name.
@@ -303,22 +337,6 @@ public class SQLParser extends SQLPatternFactory
             "([\\w$]+)" +               // (group 1) table name
             "\\s*" +                    // optional whitespace
             ";\\z"                      // semicolon at end of statement
-            );
-
-    /**
-     * EXPORT TABLE statement regex
-     * NB supports only unquoted table names
-     * Capture groups are tagged as (1) in comments below.
-     */
-    private static final Pattern PAT_EXPORT_TABLE = Pattern.compile(
-            "(?i)" +                            // (ignore case)
-            "\\A"  +                            // start statement
-            "EXPORT\\s+TABLE\\s+"  +            // EXPORT TABLE
-            "([\\w.$]+)" +                      // (group 1) <table name>
-            "(?:\\s+TO\\s+STREAM\\s+" +         // begin optional TO STREAM <export target> clause
-            "([\\w.$]+)" +                      // (group 2) <export target>
-            ")?" +                              // end optional TO STREAM <export target> clause
-            "\\s*;\\z"                          // (end statement)
             );
 
     /*
@@ -357,12 +375,11 @@ public class SQLParser extends SQLPatternFactory
             // <= means zero-width positive lookbehind.
             // This means that the "CREATE\\s{}" is required to match but is not part of the capture.
             "(?<=\\ACREATE\\s{0,1024})" +          //TODO: 0 min whitespace should be 1?
-            "(?:PROCEDURE|ROLE)|" +                // token options after CREATE
+            "(?:PROCEDURE|ROLE|FUNCTION)|" +                // token options after CREATE
             // the rest are stand-alone token options
             "\\ADROP|" +
             "\\APARTITION|" +
             "\\AREPLICATE|" +
-            "\\AEXPORT|" +
             "\\AIMPORT|" +
             "\\ADR|" +
             "\\ASET" +
@@ -552,6 +569,16 @@ public class SQLParser extends SQLPatternFactory
             // explainproc.
             "\\s*",              // extra spaces
             Pattern.MULTILINE + Pattern.CASE_INSENSITIVE);
+    // Match queries that start with "explainview" (case insensitive).  We'll convert them to @ExplainView invocations.
+    private static final Pattern ExplainViewCallPreamble = Pattern.compile(
+            "^\\s*" +            // optional indent at start of line
+            "explainView" +      // required command, whitespace terminated
+            "(\\W|$)" +          // require an end to the keyword OR EOL (group 1)
+            // Make everything that follows optional so that explainproc command
+            // diagnostics can "own" any line starting with the word
+            // explainview.
+            "\\s*",              // extra spaces
+            Pattern.MULTILINE + Pattern.CASE_INSENSITIVE);
 
     private static final SimpleDateFormat FullDateParser = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
     private static final SimpleDateFormat WholeSecondDateParser = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
@@ -631,16 +658,6 @@ public class SQLParser extends SQLPatternFactory
     public static Matcher matchDropStream(String statement)
     {
         return PAT_DROP_STREAM.matcher(statement);
-    }
-
-    /**
-     * Match statement against export table pattern
-     * @param statement  statement to match against
-     * @return           pattern matcher object
-     */
-    public static Matcher matchExportTable(String statement)
-    {
-        return PAT_EXPORT_TABLE.matcher(statement);
     }
 
     /**
@@ -733,6 +750,26 @@ public class SQLParser extends SQLPatternFactory
     public static Matcher matchCreateProcedureFromClass(String statement)
     {
         return PAT_CREATE_PROCEDURE_FROM_CLASS.matcher(statement);
+    }
+
+    /**
+     * Match statement against the pattern for create function from method
+     * @param statement  statement to match against
+     * @return           pattern matcher object
+     */
+    public static Matcher matchCreateFunctionFromMethod(String statement)
+    {
+        return PAT_CREATE_FUNCTION_FROM_METHOD.matcher(statement);
+    }
+
+    /**
+     * Match statement against the pattern for drop function
+     * @param statement  statement to match against
+     * @return           pattern matcher object
+     */
+    public static Matcher matchDropFunction(String statement)
+    {
+        return PAT_DROP_FUNCTION.matcher(statement);
     }
 
     /**
@@ -1038,7 +1075,7 @@ public class SQLParser extends SQLPatternFactory
          * find any reasonable solution.
          */
         Matcher stringFragmentMatcher = SingleQuotedString.matcher(query);
-        ArrayList<String> stringFragments = new ArrayList<String>();
+        ArrayList<String> stringFragments = new ArrayList<>();
         int i = 0;
         while (stringFragmentMatcher.find()) {
             stringFragments.add(stringFragmentMatcher.group());
@@ -1062,7 +1099,7 @@ public class SQLParser extends SQLPatternFactory
 
         String[] sqlFragments = query.split("\\s*;+\\s*");
 
-        ArrayList<String> queries = new ArrayList<String>();
+        ArrayList<String> queries = new ArrayList<>();
         for (String fragment : sqlFragments) {
             if (fragment.isEmpty()) {
                 continue;
@@ -1097,7 +1134,7 @@ public class SQLParser extends SQLPatternFactory
         // quotes don't trigger a false positive for the START of an unsafe string.
         // Skipping is accomplished by resetting paramText to an offset substring
         // after copying the skipped (or substituted) text to a string builder.
-        ArrayList<String> originalString = new ArrayList<String>();
+        ArrayList<String> originalString = new ArrayList<>();
         Matcher stringMatcher = SingleQuotedString.matcher(paramText);
         StringBuilder safeText = new StringBuilder();
         while (stringMatcher.find()) {
@@ -1118,7 +1155,7 @@ public class SQLParser extends SQLPatternFactory
         // Save anything after the last found string.
         safeText.append(paramText);
 
-        ArrayList<String> params = new ArrayList<String>();
+        ArrayList<String> params = new ArrayList<>();
         int subCount = 0;
         int neededSubs = originalString.size();
         // Split the params at the separators
@@ -1831,6 +1868,24 @@ public class SQLParser extends SQLPatternFactory
         // from a more comprehensive regexp.
         // Clean up any extra spaces around the remainder of the line,
         // which should be a proc name.
+        return statement.substring(matcher.end()).trim();
+    }
+
+    /**
+     * Parse EXPLAINVIEW <view>
+     * @param statement  statement to parse
+     * @return           view name parameter string or NULL if statement wasn't recognized
+     */
+    public static String parseExplainViewCall(String statement)
+    {
+        Matcher matcher = ExplainViewCallPreamble.matcher(statement);
+        if ( ! matcher.lookingAt()) {
+            return null;
+        }
+        // This all could probably be done more elegantly via a group extracted
+        // from a more comprehensive regexp.
+        // Clean up any extra spaces around the remainder of the line,
+        // which should be a view name.
         return statement.substring(matcher.end()).trim();
     }
 

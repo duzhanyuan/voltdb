@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -39,6 +39,12 @@ public abstract class PrivateVoltTableFactory {
     public static VoltTable createVoltTableFromSharedBuffer(ByteBuffer shared) {
         VoltTable vt = new VoltTable();
         vt.initFromBuffer(shared);
+        return vt;
+    }
+
+    public static VoltTable createVoltTableFromByteArray(byte[] backingBuff, int position, int len) {
+        VoltTable vt = new VoltTable();
+        vt.initFromByteArray(backingBuff, position, len);
         return vt;
     }
 

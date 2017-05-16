@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This file contains original code and/or modifications of original code.
  * Any modifications made by VoltDB Inc. are licensed under the following
@@ -53,7 +53,19 @@ namespace voltdb {
 class AggregatePlanNode : public AbstractPlanNode
 {
 public:
-    AggregatePlanNode(PlanNodeType type) : m_type(type) { }
+    AggregatePlanNode(PlanNodeType type)
+        : m_aggregates()
+        , m_distinctAggregates()
+        , m_aggregateOutputColumns()
+        , m_aggregateInputExpressions()
+        , m_groupByExpressions()
+        , m_partialGroupByColumns()
+        , m_type(type)
+        , m_prePredicate()
+        , m_postPredicate()
+    {
+    }
+
     ~AggregatePlanNode();
     PlanNodeType getPlanNodeType() const;
     std::string debugInfo(const std::string &spacer) const;

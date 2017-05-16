@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -35,7 +35,7 @@ import org.voltdb.processtools.ShellTools;
  * Generating a sample is a manually instigated process that must be done
  * periodically.
  * It stored history in three buckets, each with a fixed size.
- * Each bucket should me more granular than the last.
+ * Each bucket should be more granular than the last.
  *
  */
 public class SystemStatsCollector {

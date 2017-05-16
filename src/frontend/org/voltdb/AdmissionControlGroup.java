@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -26,7 +26,7 @@ import org.HdrHistogram_voltpatches.AbstractHistogram;
 import org.cliffc_voltpatches.high_scale_lib.NonBlockingHashMap;
 import org.voltcore.logging.VoltLogger;
 import org.voltdb.dtxn.InitiatorStats.InvocationInfo;
-import org.voltdb.dtxn.LatencyStats;
+import org.voltdb.dtxn.LatencyHistogramStats;
 
 /**
  * Manage admission control for incoming requests by tracking the size of outstanding requests
@@ -99,7 +99,7 @@ public class AdmissionControlGroup implements org.voltcore.network.QueueMonitor
     private final ConcurrentHashMap<Long, Map<String, org.voltdb.dtxn.InitiatorStats.InvocationInfo>> m_connectionStates =
                  new ConcurrentHashMap<Long, Map<String, org.voltdb.dtxn.InitiatorStats.InvocationInfo>>(1024, .75f, 1);
 
-    private final AbstractHistogram m_latencyInfo = LatencyStats.constructHistogram(true);
+    private final AbstractHistogram m_latencyInfo = LatencyHistogramStats.constructHistogram(true);
 
     public AdmissionControlGroup(int maxBytes, int maxRequests)
     {
@@ -183,7 +183,7 @@ public class AdmissionControlGroup implements org.voltcore.network.QueueMonitor
                     networkLog.error(
                             "Backpressure reports a negative outstanding transaction byte count (" +
                             m_pendingTxnBytes +
-                            "). No action required.");
+                            "). No action required.", new RuntimeException("for stack trace purposes"));
                 }
             }
 

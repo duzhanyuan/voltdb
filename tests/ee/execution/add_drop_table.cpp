@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -48,6 +48,8 @@ class AddDropTableTest : public Test {
         m_resultBuffer = new char[1024 * 1024 * 2];
         m_exceptionBuffer = new char[4096];
         m_engine->setBuffers(NULL, 0,
+                             NULL, 0,
+                             NULL, 0,
                              m_resultBuffer, 1024 * 1024 * 2,
                              m_exceptionBuffer, 4096);
 
@@ -301,14 +303,14 @@ TEST_F(AddDropTableTest, DeletionsSetCleared)
  */
 TEST_F(AddDropTableTest, AddTable)
 {
-    bool changeResult = m_engine->updateCatalog( 0, tableACmds());
+    bool changeResult = m_engine->updateCatalog( 0, true, tableACmds());
     ASSERT_TRUE(changeResult);
 
     Table *table1, *table2;
-    table1 = m_engine->getTable("tableA");
+    table1 = m_engine->getTableByName("tableA");
     ASSERT_TRUE(table1 != NULL);
 
-    table2 = m_engine->getTable(1); // catalogId
+    table2 = m_engine->getTableById(1); // catalogId
     ASSERT_TRUE(table2 != NULL);
     ASSERT_TRUE(table1 == table2);
 }
@@ -328,23 +330,23 @@ TEST_F(AddDropTableTest, AddTwoTablesDropTwoTables)
 
     // add tableA, tableB
     std::string a_and_b = tableACmds() + "\n" + tableBCmds();
-    bool changeResult = m_engine->updateCatalog( 0, a_and_b);
+    bool changeResult = m_engine->updateCatalog( 0, true, a_and_b);
     ASSERT_TRUE(changeResult);
     ASSERT_EQ(2, db->tables().size());
 
     // verify first table
-    table1 = m_engine->getTable("tableA");
+    table1 = m_engine->getTableByName("tableA");
     ASSERT_TRUE(table1 != NULL);
 
-    table2 = m_engine->getTable(1); // catalogId
+    table2 = m_engine->getTableById(1); // catalogId
     ASSERT_TRUE(table2 != NULL);
     ASSERT_TRUE(table1 == table2);
 
     // verify second table
-    table1 = m_engine->getTable("tableB");
+    table1 = m_engine->getTableByName("tableB");
     ASSERT_TRUE(table1 != NULL);
 
-    table2 = m_engine->getTable(2); // catalogId
+    table2 = m_engine->getTableById(2); // catalogId
     ASSERT_TRUE(table2 != NULL);
     ASSERT_TRUE(table1 == table2);
 
@@ -353,13 +355,13 @@ TEST_F(AddDropTableTest, AddTwoTablesDropTwoTables)
     table2->incrementRefcount();
 
     std::string drop = tableADeleteCmd() + "\n" + tableBDeleteCmd();
-    changeResult = m_engine->updateCatalog( 1,drop);
+    changeResult = m_engine->updateCatalog( 1,true, drop);
     ASSERT_TRUE(changeResult);
     ASSERT_EQ(0, db->tables().size());
-    ASSERT_EQ(NULL, m_engine->getTable(1)); // catalogId
-    ASSERT_EQ(NULL, m_engine->getTable("tableA"));
-    ASSERT_EQ(NULL, m_engine->getTable(2)); // catalogId
-    ASSERT_EQ(NULL, m_engine->getTable("tableB"));
+    ASSERT_EQ(NULL, m_engine->getTableById(1)); // catalogId
+    ASSERT_EQ(NULL, m_engine->getTableByName("tableA"));
+    ASSERT_EQ(NULL, m_engine->getTableById(2)); // catalogId
+    ASSERT_EQ(NULL, m_engine->getTableByName("tableB"));
 
     table1->decrementRefcount();
     table2->decrementRefcount();
@@ -372,26 +374,26 @@ TEST_F(AddDropTableTest, AddTwoTablesDropTwoTables)
 TEST_F(AddDropTableTest, DropTable)
 {
     // add. verified by AddTable test.
-    bool result = m_engine->updateCatalog( 0, tableACmds());
+    bool result = m_engine->updateCatalog( 0, true, tableACmds());
     ASSERT_TRUE(result);
 
     Table *table1, *table2;
 
     // grab the table. need some data from it to complete the
     // test. hold a reference to keep it safe.
-    table1 = m_engine->getTable("tableA");
+    table1 = m_engine->getTableByName("tableA");
     table1->incrementRefcount();
 
     ASSERT_TRUE(table1 != NULL);
 
     // and delete
-    result = m_engine->updateCatalog( 1, tableADeleteCmd());
+    result = m_engine->updateCatalog( 1, true, tableADeleteCmd());
     ASSERT_TRUE(result);
 
-    table2 = m_engine->getTable("tableA");
+    table2 = m_engine->getTableByName("tableA");
     ASSERT_TRUE(table2 == NULL);
 
-    table2 = m_engine->getTable(0);
+    table2 = m_engine->getTableById(0);
     ASSERT_TRUE(table2 == NULL);
 
     // release the last reference.
@@ -411,7 +413,7 @@ TEST_F(AddDropTableTest, AddDropAdd)
     // result = m_engine->updateCatalog(addboth, ++m_catVersion);
     // ASSERT_TRUE(result);
 
-    result = m_engine->updateCatalog( -1, tableACmds());
+    result = m_engine->updateCatalog( -1, true, tableACmds());
     ASSERT_TRUE(result);
 
     for (int ii=0; ii < 20; ii++) {
@@ -419,11 +421,11 @@ TEST_F(AddDropTableTest, AddDropAdd)
         // ASSERT_TRUE(result);
 
         // A-only to B-only
-        result = m_engine->updateCatalog( (ii * 2), tableADeleteCmd() + "\n" + tableBCmds());
+        result = m_engine->updateCatalog( (ii * 2), true, tableADeleteCmd() + "\n" + tableBCmds());
         ASSERT_TRUE(result);
 
         // B-only to A-only
-        result = m_engine->updateCatalog( (ii * 2) + 1, tableBDeleteCmd() + "\n" + tableACmds());
+        result = m_engine->updateCatalog( (ii * 2) + 1, true, tableBDeleteCmd() + "\n" + tableACmds());
         ASSERT_TRUE(result);
 
         // result = m_engine->updateCatalog(tableBCmds(), ++m_catVersion);
@@ -438,10 +440,10 @@ TEST_F(AddDropTableTest, AddDropAdd)
  */
 TEST_F(AddDropTableTest, StatsWithDropTable)
 {
-    bool result = m_engine->updateCatalog( 0, tableACmds());
+    bool result = m_engine->updateCatalog( 0, true, tableACmds());
     ASSERT_TRUE(result);
 
-    result = m_engine->updateCatalog( 1, tableBCmds());
+    result = m_engine->updateCatalog( 1, true, tableBCmds());
     ASSERT_TRUE(result);
 
     // get stats - relying on valgrind for most verification here
@@ -450,7 +452,7 @@ TEST_F(AddDropTableTest, StatsWithDropTable)
     ASSERT_TRUE(statresult == 1);
 
     // delete A.
-    result = m_engine->updateCatalog( 2, tableADeleteCmd());
+    result = m_engine->updateCatalog( 2, true, tableADeleteCmd());
     ASSERT_TRUE(result);
 
     // get stats for the remaining table by relative offset
@@ -458,7 +460,7 @@ TEST_F(AddDropTableTest, StatsWithDropTable)
     statresult = m_engine->getStats(STATISTICS_SELECTOR_TYPE_TABLE, locators1, 1, false, 1L);
     ASSERT_TRUE(statresult == 1);
 
-    result = m_engine->updateCatalog( 3, tableACmds());
+    result = m_engine->updateCatalog( 3, true, tableACmds());
     ASSERT_TRUE(result);
 
     // get stats for the tables by relative offset

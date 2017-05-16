@@ -1,5 +1,5 @@
 # This file is part of VoltDB.
-# Copyright (C) 2008-2016 VoltDB Inc.
+# Copyright (C) 2008-2017 VoltDB Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -91,7 +91,7 @@ def test_os_release(output):
             if releaseNum >= "6.6":
                 supported = True
         elif "ubuntu" in distInfo[0].lower():
-            if distInfo[1] in ("12.04", "14.04", "16.04"):
+            if distInfo[1] in ("14.04", "16.04"):
                 supported = True
     elif platform.system() == "Darwin":
         output["OS"] = ["PASS", "MacOS X"]

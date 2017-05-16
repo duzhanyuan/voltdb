@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -33,6 +33,7 @@ import org.voltcore.messaging.HeartbeatResponseMessage;
 import org.voltcore.messaging.VoltMessage;
 import org.voltcore.utils.Pair;
 import org.voltdb.ClientResponseImpl;
+import org.voltdb.DependencyPair;
 import org.voltdb.ParameterSet;
 import org.voltdb.StoredProcedureInvocation;
 import org.voltdb.VoltTable;
@@ -317,7 +318,7 @@ public class TestVoltMessageSerialization extends TestCase {
 
         FragmentResponseMessage fr = new FragmentResponseMessage(ft, 23);
         fr.setStatus(FragmentResponseMessage.UNEXPECTED_ERROR, new EEException(1));
-        fr.addDependency(99, table);
+        fr.addDependency(new DependencyPair.TableDependencyPair(99, table));
 
         FragmentResponseMessage fr2 = (FragmentResponseMessage) checkVoltMessage(fr);
 

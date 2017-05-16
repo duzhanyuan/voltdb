@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -31,8 +31,8 @@ import org.json_voltpatches.JSONException;
 import org.json_voltpatches.JSONObject;
 import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.Mailbox;
-import org.voltcore.messaging.TransactionInfoBaseMessage;
 import org.voltcore.messaging.VoltMessage;
+import org.voltcore.utils.CoreUtils;
 import org.voltdb.CatalogContext;
 import org.voltdb.CatalogSpecificPlanner;
 import org.voltdb.CommandLog;
@@ -42,6 +42,7 @@ import org.voltdb.VoltDB;
 import org.voltdb.VoltTable;
 import org.voltdb.dtxn.TransactionState;
 import org.voltdb.messaging.CompleteTransactionMessage;
+import org.voltdb.messaging.DummyTransactionTaskMessage;
 import org.voltdb.messaging.FragmentResponseMessage;
 import org.voltdb.messaging.FragmentTaskMessage;
 import org.voltdb.messaging.InitiateResponseMessage;
@@ -49,6 +50,7 @@ import org.voltdb.messaging.Iv2EndOfLogMessage;
 import org.voltdb.messaging.Iv2InitiateTaskMessage;
 import org.voltdb.sysprocs.BalancePartitionsRequest;
 import org.voltdb.utils.MiscUtils;
+import org.voltdb.utils.VoltTrace;
 
 import com.google_voltpatches.common.collect.Maps;
 import com.google_voltpatches.common.collect.Sets;
@@ -83,7 +85,7 @@ public class MpScheduler extends Scheduler
     MpScheduler(int partitionId, List<Long> buddyHSIds, SiteTaskerQueue taskQueue)
     {
         super(partitionId, taskQueue);
-        m_pendingTasks = new MpTransactionTaskQueue(m_tasks, getCurrentTxnId());
+        m_pendingTasks = new MpTransactionTaskQueue(m_tasks);
         m_buddyHSIds = buddyHSIds;
         m_iv2Masters = new ArrayList<Long>();
         m_partitionMasters = Maps.newHashMap();
@@ -173,32 +175,7 @@ public class MpScheduler extends Scheduler
     @Override
     public boolean sequenceForReplay(VoltMessage message)
     {
-        boolean canDeliver = true;
-        long sequenceWithTxnId = Long.MIN_VALUE;
-
-        //--------------------------------------------
-        // DRv1 path, mark for future removal
-        boolean dr = ((message instanceof TransactionInfoBaseMessage &&
-                ((TransactionInfoBaseMessage)message).isForDRv1()));
-
-        if (dr) {
-            VoltDB.crashLocalVoltDB("DRv1 path should never be called", true, null);
-            sequenceWithTxnId = ((TransactionInfoBaseMessage)message).getOriginalTxnId();
-            InitiateResponseMessage dupe = m_replaySequencer.dedupe(sequenceWithTxnId,
-                    (TransactionInfoBaseMessage) message);
-            if (dupe != null) {
-                canDeliver = false;
-                // Duplicate initiate task message, send response
-                m_mailbox.send(dupe.getInitiatorHSId(), dupe);
-            }
-            else {
-                m_replaySequencer.updateLastSeenUniqueId(sequenceWithTxnId,
-                        (TransactionInfoBaseMessage) message);
-                canDeliver = true;
-            }
-        }
-        //--------------------------------------------
-        return canDeliver;
+        return true;
     }
 
     @Override
@@ -215,6 +192,9 @@ public class MpScheduler extends Scheduler
         }
         else if (message instanceof Iv2EndOfLogMessage) {
             handleEOLMessage();
+        }
+        else if (message instanceof DummyTransactionTaskMessage) {
+            // leave empty to ignore it on purpose
         }
         else {
             throw new RuntimeException("UNKNOWN MESSAGE TYPE, BOOM!");
@@ -240,18 +220,25 @@ public class MpScheduler extends Scheduler
         if (message.isForReplay()) {
             timestamp = message.getUniqueId();
             m_uniqueIdGenerator.updateMostRecentlyGeneratedUniqueId(timestamp);
-        } else if (message.isForDRv1()) {
-            timestamp = message.getStoredProcedureInvocation().getOriginalUniqueId();
-            // @LoadMultipartitionTable does not have a valid uid
-            if (UniqueIdGenerator.getPartitionIdFromUniqueId(timestamp) == m_partitionId) {
-                m_uniqueIdGenerator.updateMostRecentlyGeneratedUniqueId(timestamp);
-            }
         } else  {
             timestamp = m_uniqueIdGenerator.getNextUniqueId();
         }
 
         TxnEgo ego = advanceTxnEgo();
         mpTxnId = ego.getTxnId();
+
+        final String threadName = Thread.currentThread().getName(); // Thread name has to be materialized here
+        final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.MPI);
+        if (traceLog != null) {
+            traceLog.add(() -> VoltTrace.meta("process_name", "name", CoreUtils.getHostnameOrAddress()))
+                    .add(() -> VoltTrace.meta("thread_name", "name", threadName))
+                    .add(() -> VoltTrace.meta("thread_sort_index", "sort_index", Integer.toString(100)))
+                    .add(() -> VoltTrace.beginAsync("initmp", mpTxnId,
+                                                    "txnId", TxnEgo.txnIdToString(mpTxnId),
+                                                    "ciHandle", message.getClientInterfaceHandle(),
+                                                    "name", procedureName,
+                                                    "read", message.isReadOnly()));
+        }
 
         // Don't have an SP HANDLE at the MPI, so fill in the unused value
         Iv2Trace.logIv2InitiateTaskMessage(message, m_mailbox.getHSId(), mpTxnId, Long.MIN_VALUE);
@@ -421,6 +408,11 @@ public class MpScheduler extends Scheduler
     // see all of these messages and control their transmission.
     public void handleInitiateResponseMessage(InitiateResponseMessage message)
     {
+        final VoltTrace.TraceEventBatch traceLog = VoltTrace.log(VoltTrace.Category.MPI);
+        if (traceLog != null) {
+            traceLog.add(() -> VoltTrace.endAsync("initmp", message.getTxnId()));
+        }
+
         DuplicateCounter counter = m_duplicateCounters.get(message.getTxnId());
         if (counter != null) {
             int result = counter.offer(message);
@@ -437,6 +429,8 @@ public class MpScheduler extends Scheduler
             }
             else if (result == DuplicateCounter.MISMATCH) {
                 VoltDB.crashLocalVoltDB("HASH MISMATCH running every-site system procedure.", true, null);
+            } else if (result == DuplicateCounter.ABORT) {
+                VoltDB.crashLocalVoltDB("PARTIAL ROLLBACK/ABORT running every-site system procedure.", true, null);
             }
             // doing duplicate suppresion: all done.
         }

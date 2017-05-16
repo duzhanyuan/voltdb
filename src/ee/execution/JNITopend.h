@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -32,6 +32,9 @@ public:
 
     inline JNITopend* updateJNIEnv(JNIEnv *env) { m_jniEnv = env; return this; }
     int loadNextDependency(int32_t dependencyId, Pool *stringPool, Table* destination);
+    void traceLog(bool isBegin,
+                  const char *name,
+                  const char *args);
     int64_t fragmentProgressUpdate(
                 int32_t batchIndex,
                 PlanNodeType planNodeType,
@@ -71,6 +74,7 @@ private:
     jobject m_javaExecutionEngine;
     jmethodID m_fallbackToEEAllocatedBufferMID;
     jmethodID m_nextDependencyMID;
+    jmethodID m_traceLogMID;
     jmethodID m_fragmentProgressUpdateMID;
     jmethodID m_planForFragmentIdMID;
     jmethodID m_crashVoltDBMID;

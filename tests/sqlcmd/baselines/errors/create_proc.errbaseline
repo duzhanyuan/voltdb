@@ -8,9 +8,7 @@ Expect to fail as Trivial should have failed proc creation.
 Undefined procedure: Trivial
 Expect to fail because of failure to "redefine" the Trivial proc with its
     underlying class removed. The error message could be better here.
-Unexpected IO exception @UpdateClasses modifying classes from catalog: DDL Error: "Cannot load class for procedure: sqlcmdtest.Trivial
-   caused by:
-   java.lang.ClassNotFoundException: sqlcmdtest.Trivial"
+Unexpected error in @UpdateClasses modifying classes from catalog: Cannot load class for procedure sqlcmdtest.Trivial
 Expect to fail now that class has been successfully removed
 [Ad Hoc DDL Input]: VoltDB DDL Error: "Cannot load class for procedure: sqlcmdtest.Trivial
    caused by:
@@ -23,6 +21,7 @@ VOLTDB ERROR: UNEXPECTED FAILURE:
 	at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:#)
 	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:#)
 	at java.lang.reflect.Method.invoke(Method.java:#)
+	at org.voltdb.ProcedureRunner.coreCall(ProcedureRunner.java:#)
 	at org.voltdb.ProcedureRunner.call(ProcedureRunner.java:#)
 	at org.voltdb.iv2.ProcedureTask.processInitiateTask(ProcedureTask.java:#)
 	at org.voltdb.iv2.MpProcedureTask.run(MpProcedureTask.java:#)
@@ -35,7 +34,7 @@ Caused by: java.lang.ClassNotFoundException: sqlcmdtest.Breakable0$NestedGetsSab
 	at sun.misc.Launcher$AppClassLoader.loadClass(Launcher.java:#)
 	at java.lang.ClassLoader.loadClass(ClassLoader.java:#)
 	at org.voltdb.utils.InMemoryJarfile$JarLoader.loadClass(InMemoryJarfile.java:#)
-	... 11 more
+	... 12 more
 
 Expect to fail because the jar has been killed by dropping a statically
     dependent class.
@@ -72,6 +71,7 @@ VOLTDB ERROR: UNEXPECTED FAILURE:
 	at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:#)
 	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:#)
 	at java.lang.reflect.Method.invoke(Method.java:#)
+	at org.voltdb.ProcedureRunner.coreCall(ProcedureRunner.java:#)
 	at org.voltdb.ProcedureRunner.call(ProcedureRunner.java:#)
 	at org.voltdb.iv2.ProcedureTask.processInitiateTask(ProcedureTask.java:#)
 	at org.voltdb.iv2.MpProcedureTask.run(MpProcedureTask.java:#)
@@ -84,7 +84,7 @@ Caused by: java.lang.ClassNotFoundException: sqlcmdtest.Breakable0$NestedGetsSab
 	at sun.misc.Launcher$AppClassLoader.loadClass(Launcher.java:#)
 	at java.lang.ClassLoader.loadClass(ClassLoader.java:#)
 	at org.voltdb.utils.InMemoryJarfile$JarLoader.loadClass(InMemoryJarfile.java:#)
-	... 11 more
+	... 12 more
 
 
 End of error output.

@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,16 +17,18 @@
 
 package org.voltdb.importer.formatter;
 
+import java.nio.ByteBuffer;
+
 /**
  * Interface for the formatter, the transform method gets called after the formatter factory
  * creates the formatter.
  */
-public interface Formatter<T> {
+public interface Formatter {
     /**
      * Transforms data from one format to another.
      * @param sourceData - raw data from source
      * @return Array of data converted from sourceData
      * @throws FormatException
      */
-    public Object[] transform(T sourceData) throws FormatException;
+    public Object[] transform(ByteBuffer sourceData) throws FormatException;
 }

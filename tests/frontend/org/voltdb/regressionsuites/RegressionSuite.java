@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -32,29 +32,41 @@ import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 import java.util.regex.Pattern;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+
 import org.apache.commons.lang3.StringUtils;
+import org.voltcore.utils.ssl.SSLConfiguration;
+import org.voltdb.CatalogContext;
 import org.voltdb.VoltDB;
 import org.voltdb.VoltTable;
 import org.voltdb.VoltType;
+import org.voltdb.catalog.Catalog;
+import org.voltdb.catalog.CatalogDiffEngine;
 import org.voltdb.client.Client;
 import org.voltdb.client.ClientAuthScheme;
 import org.voltdb.client.ClientConfig;
 import org.voltdb.client.ClientConfigForTest;
 import org.voltdb.client.ClientFactory;
+import org.voltdb.client.ClientResponse;
 import org.voltdb.client.ConnectionUtil;
 import org.voltdb.client.NoConnectionsException;
 import org.voltdb.client.ProcCallException;
 import org.voltdb.common.Constants;
 import org.voltdb.types.GeographyPointValue;
 import org.voltdb.types.GeographyValue;
+import org.voltdb.types.TimestampType;
 import org.voltdb.types.VoltDecimalHelper;
+import org.voltdb.utils.CatalogUtil;
 import org.voltdb.utils.Encoder;
+import org.voltdb.utils.InMemoryJarfile;
 
 import com.google_voltpatches.common.net.HostAndPort;
 
@@ -79,6 +91,9 @@ public class RegressionSuite extends TestCase {
     private final ArrayList<Client> m_clients = new ArrayList<>();
     private final ArrayList<SocketChannel> m_clientChannels = new ArrayList<>();
     protected final String m_methodName;
+    // If the current RegressionSuite instance is the last one in the current VoltServerConfig,
+    // shutdown the cluster completely after finishing the test.
+    protected boolean m_completeShutdown;
 
     /**
      * Trivial constructor that passes parameter on to superclass.
@@ -87,6 +102,9 @@ public class RegressionSuite extends TestCase {
     public RegressionSuite(final String name) {
         super(name);
         m_methodName = name;
+
+        VoltServerConfig.setInstanceSet(new HashSet<>());
+        m_completeShutdown = false;
     }
 
     /**
@@ -95,9 +113,23 @@ public class RegressionSuite extends TestCase {
      */
     @Override
     public void setUp() throws Exception {
+
         //New tests means a new server thread that hasn't done a restore
         m_config.setCallingMethodName(m_methodName);
         m_config.startUp(true);
+    }
+
+    private static Catalog getCurrentCatalog() {
+        CatalogContext context = VoltDB.instance().getCatalogContext();
+        if (context == null) {
+            return null;
+        }
+        InMemoryJarfile currentCatalogJar = context.getCatalogJar();
+        String serializedCatalogString = CatalogUtil.getSerializedCatalogStringFromJar(currentCatalogJar);
+        assertNotNull(serializedCatalogString);
+        Catalog c = new Catalog();
+        c.execute(serializedCatalogString);
+        return c;
     }
 
     /**
@@ -106,7 +138,46 @@ public class RegressionSuite extends TestCase {
      */
     @Override
     public void tearDown() throws Exception {
-        m_config.shutDown();
+        if (m_completeShutdown) {
+            m_config.shutDown();
+        }
+        else {
+            Catalog currentCataog = getCurrentCatalog();
+            if (currentCataog != null) {
+                CatalogDiffEngine diff = new CatalogDiffEngine(m_config.getInitialCatalog(), currentCataog);
+                // All catalog changes will have a changed "set /clusters#cluster/databases#database schema" command.
+                // If the diff command only has this line, it means something is changed first but restored later.
+                // We will ignore this case.
+                if (diff.commands().split("\n").length > 1) {
+                    fail("Catalog changed in test " + getName() +
+                            " while the regression suite optimization is on: \n" +
+                            diff.getDescriptionOfChanges(false));
+                }
+            }
+
+            Client client = getClient();
+            VoltTable tableList = client.callProcedure("@SystemCatalog", "TABLES").getResults()[0];
+            ArrayList<String> tableNames = new ArrayList<>(tableList.getRowCount());
+            int tableNameColIdx = tableList.getColumnIndex("TABLE_NAME");
+            int tableTypeColIdx = tableList.getColumnIndex("TABLE_TYPE");
+            while (tableList.advanceRow()) {
+                String tableType = tableList.getString(tableTypeColIdx);
+                if (! tableType.equalsIgnoreCase("EXPORT")) {
+                    tableNames.add(tableList.getString(tableNameColIdx));
+                }
+            }
+            for (String tableName : tableNames) {
+                try {
+                    client.callProcedure("@AdHoc", "DELETE FROM " + tableName);
+                }
+                catch (ProcCallException pce) {
+                    if (! pce.getMessage().contains("Illegal to modify a materialized view.")) {
+                        fail("Hit an exception when cleaning up tables between tests: " + pce.getMessage());
+                    }
+                }
+            }
+            client.drain();
+        }
         for (final Client c : m_clients) {
             c.close();
         }
@@ -332,9 +403,11 @@ public class RegressionSuite extends TestCase {
      *
      * @return A SocketChannel that is already authenticated with the server
      */
+
     public SocketChannel getClientChannel() throws IOException {
         return getClientChannel(false);
     }
+
     public SocketChannel getClientChannel(final boolean noTearDown) throws IOException {
         final List<String> listeners = m_config.getListenerAddresses();
         final Random r = new Random();
@@ -345,9 +418,19 @@ public class RegressionSuite extends TestCase {
         if (hNp.hasPort()) {
             port = hNp.getPort();
         }
+
+        SSLEngine sslEngine = null;
+        boolean sslEnabled = Boolean.valueOf(System.getenv("ENABLE_SSL") == null ? Boolean.toString(Boolean.getBoolean("ENABLE_SSL")) : System.getenv("ENABLE_SSL"));
+         if (sslEnabled) {
+             SSLContext sslContext = SSLConfiguration.createSslContext(new SSLConfiguration.SslConfig());
+             sslEngine = sslContext.createSSLEngine("client", port);
+             sslEngine.setUseClientMode(true);
+         }
+
         final SocketChannel channel = (SocketChannel)
             ConnectionUtil.getAuthenticatedConnection(
-                    hNp.getHostText(), m_username, hashedPassword, port, null, ClientAuthScheme.getByUnencodedLength(hashedPassword.length))[0];
+                    hNp.getHostText(), m_username, hashedPassword, port, null,
+                    ClientAuthScheme.getByUnencodedLength(hashedPassword.length), sslEngine)[0];
         channel.configureBlocking(true);
         if (!noTearDown) {
             synchronized (m_clientChannels) {
@@ -356,7 +439,6 @@ public class RegressionSuite extends TestCase {
         }
         return channel;
     }
-
     /**
      * Protected method used by MultiConfigSuiteBuilder to set the VoltServerConfig
      * instance a particular test will run with.
@@ -462,7 +544,7 @@ public class RegressionSuite extends TestCase {
         }
     }
 
-    static private void validateTableOfLongs(String messagePrefix,
+    private static void validateTableOfLongs(String messagePrefix,
             VoltTable vt, long[][] expected) {
         assertNotNull(expected);
         if (expected.length != vt.getRowCount()) {
@@ -479,6 +561,14 @@ public class RegressionSuite extends TestCase {
         for (int i=0; i < len; i++) {
             validateRowOfLongs(messagePrefix + " at row " + (i+1) + ", ", vt, expected[i]);
         }
+    }
+
+    protected void validateRowCount(Client client, String query, int expected)
+            throws NoConnectionsException, IOException, ProcCallException {
+        VoltTable result = client.callProcedure("@AdHoc", query).getResults()[0];
+        int actual = result.getRowCount();
+        assertEquals("Wrong row count from query '" + query + "'",
+                expected, actual);
     }
 
     public static void validateTableOfLongs(VoltTable vt, long[][] expected) {
@@ -536,24 +626,24 @@ public class RegressionSuite extends TestCase {
     }
 
     /**
-     * Given a two dimensional array of longs, randomly permute the rows, but
+     * Given a two dimensional array, randomly permute the rows, but
      * leave the columns alone.  This is used to generate test cases for kinds
      * of sorts.
      *
      * @param input
      */
-    static protected void shuffleArrayOfLongs(long [][] input) {
+    static protected <T> T[][] shuffleArray(T [][] input) {
+        T[][] output = input.clone();
         Integer [] indices = new Integer[input.length];
         for (int idx = 0; idx < indices.length; idx += 1) {
             indices[idx] = Integer.valueOf(idx);
         }
         List<Integer> permutation = Arrays.asList(indices);
         Collections.shuffle(permutation);
-        long[] tmp = input[permutation.get(0)];
-        for (int idx = 0; idx < input.length-1; idx += 1) {
-            input[permutation.get(idx)] = input[permutation.get(idx + 1)];
+        for (int idx = 0; idx < input.length; idx += 1) {
+            output[idx] = input[permutation.get(idx)];
         }
-        input[permutation.get(input.length-1)] = tmp;
+        return output;
     }
 
     static protected void validateTableColumnOfScalarLong(VoltTable vt, int col, long[] expected) {
@@ -767,36 +857,68 @@ public class RegressionSuite extends TestCase {
         assertTablesAreEqual(prefix, expectedRows, actualRows, null);
     }
 
+    private static final long TOO_MUCH_INFO = 100;
     protected void assertTablesAreEqual(String prefix, VoltTable expectedRows, VoltTable actualRows, Double epsilon) {
         assertEquals(prefix + "column count mismatch.  Expected: " + expectedRows.getColumnCount() + " actual: " + actualRows.getColumnCount(),
                 expectedRows.getColumnCount(), actualRows.getColumnCount());
-
-        int i = 0;
-        while(expectedRows.advanceRow()) {
-            assertTrue(prefix + "too few actual rows; expected more than " + (i + 1), actualRows.advanceRow());
-
+        if (expectedRows.getRowCount() != actualRows.getRowCount()) {
+            long expRowCount = expectedRows.getRowCount();
+            long actRowCount = actualRows.getRowCount();
+            if (expRowCount + actRowCount < TOO_MUCH_INFO) {
+                System.out.println("Expected: " + expectedRows);
+                System.out.println("Actual:   " + actualRows);
+            }
+            else {
+                System.out.println("Expected: " + expRowCount + " rows");
+                System.out.println("Actual:   " + actRowCount + " rows");
+            }
+            fail(prefix + "row count mismatch.  Expected: " + expectedRows.getRowCount() + " actual: " + actualRows.getRowCount());
+        }
+        int rowNum = 1;
+        while (expectedRows.advanceRow()) {
+            if (! actualRows.advanceRow()) {
+                fail(prefix + "too few actual rows; expected more than " + rowNum);
+            }
             for (int j = 0; j < actualRows.getColumnCount(); j++) {
                 String columnName = actualRows.getColumnName(j);
-                String colPrefix = prefix + "row " + i + ": column: " + columnName + ": ";
-                VoltType actualTy = actualRows.getColumnType(j);
-                VoltType expectedTy = expectedRows.getColumnType(j);
-                assertEquals(colPrefix + "type mismatch", expectedTy, actualTy);
+                String colPrefix = prefix + "row " + rowNum + ": column: " + columnName + ": ";
+                VoltType actualType = actualRows.getColumnType(j);
+                VoltType expectedType = expectedRows.getColumnType(j);
+                assertEquals(colPrefix + "type mismatch", expectedType, actualType);
 
-                Object expectedObj = expectedRows.get(j,  expectedTy);
-                Object actualObj = actualRows.get(j,  actualTy);
-                String message = colPrefix + "values not equal: expected: " + expectedObj + ", actual: " + actualObj;
-                if (expectedTy != VoltType.FLOAT) {
-                    assertEquals(message, expectedObj, actualObj);
+                Object expectedObj = expectedRows.get(j, expectedType);
+                Object actualObj = actualRows.get(j, actualType);
+                if (expectedRows.wasNull()) {
+                    if (actualRows.wasNull()) {
+                        continue;
+                    }
+                    fail(colPrefix + "expected null, got non null value: " + actualObj);
                 }
                 else {
-                    assertNotNull("You pass in an epsilon to compare tables with floating point columns", epsilon);
-                    assertEquals(message, (Double)expectedObj, (Double)actualObj, epsilon);
+                    assertFalse(colPrefix + "expected the value " + expectedObj +
+                            ", got a null value.",
+                            actualRows.wasNull());
+                    String message = colPrefix + "values not equal: ";
+                    if (expectedType == VoltType.FLOAT) {
+                        if (epsilon != null) {
+                            assertEquals(message, (Double)expectedObj, (Double)actualObj, epsilon);
+                            continue;
+                        }
+                        // With no epsilon provided, fall through to take
+                        // a chance on an exact value match, but helpfully
+                        // annotate any false positive that results.
+                        message += ". NOTE: You may want to pass a" +
+                                " non-null epsilon value >= " +
+                                Math.abs((Double)expectedObj - (Double)actualObj) +
+                                " to the table comparison test " +
+                                " if nearly equal FLOAT values are " +
+                                " causing a false mismatch.";
+                    }
+                    assertEquals(message, expectedObj, actualObj);
                 }
             }
-
-            i++;
+            rowNum++;
         }
-        assertFalse(prefix + "too many actual rows; expected only " + i, actualRows.advanceRow());
     }
 
     public static void assertEquals(String msg, GeographyPointValue expected, GeographyPointValue actual) {
@@ -922,7 +1044,7 @@ public class RegressionSuite extends TestCase {
                 assertEquals(msg, val, actualRow.getLong(i));
             }
             else if (expectedObj instanceof Double) {
-                double expectedValue= (Double)expectedObj;
+                double expectedValue = (Double)expectedObj;
                 double actualValue = actualRow.getDouble(i);
                 // check if the row value was evaluated as null. Looking
                 // at return is not reliable way to do so;
@@ -940,9 +1062,20 @@ public class RegressionSuite extends TestCase {
                     assertTrue(fullMsg, Math.abs(expectedValue - actualValue) < epsilon);
                 }
             }
+            else if (expectedObj instanceof BigDecimal) {
+                BigDecimal exp = (BigDecimal)expectedObj;
+                BigDecimal got = actualRow.getDecimalAsBigDecimal(i);
+                // Either both are null or neither are null.
+                assertEquals(exp == null, got == null);
+                assertEquals(msg, exp.doubleValue(), got.doubleValue(), epsilon);
+            }
             else if (expectedObj instanceof String) {
                 String val = (String)expectedObj;
                 assertEquals(msg, val, actualRow.getString(i));
+            }
+            else if (expectedObj instanceof TimestampType) {
+                TimestampType val = (TimestampType)expectedObj;
+                assertEquals(msg, val, actualRow.getTimestampAsTimestamp(i));
             }
             else {
                 fail("Unexpected type in expected row: " + expectedObj.getClass().getSimpleName());
@@ -1146,16 +1279,32 @@ public class RegressionSuite extends TestCase {
         }
     }
 
-    protected static void truncateTables(Client client, String[] tables) throws IOException, ProcCallException {
+    protected static void truncateTables(Client client, String... tables)
+            throws IOException, ProcCallException {
         for (String tb : tables) {
             truncateTable(client, tb);
         }
     }
 
-    protected static void truncateTable(Client client, String tb) throws IOException, ProcCallException {
+    protected static void truncateTable(Client client, String tb)
+            throws IOException, ProcCallException {
         client.callProcedure("@AdHoc", "Truncate table " + tb);
         validateTableOfScalarLongs(client, "select count(*) from " + tb, new long[]{0});
     }
+
+    protected static void truncateAllTables(Client client) throws Exception {
+        ClientResponse cr;
+        cr = client.callProcedure("@SystemCatalog", "TABLES");
+        assertEquals(cr.getStatus(), ClientResponse.SUCCESS);
+        VoltTable vt = cr.getResults()[0];
+        String allTables[] = new String[vt.getRowCount()];
+        int idx = 0;
+        while (vt.advanceRow()) {
+            allTables[idx++] = vt.getString("TABLE_NAME");
+        }
+        truncateTables(client, allTables);
+    }
+
 
     /**
      * A convenience method to build a Properties object initialized with an

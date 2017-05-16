@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.NavigableSet;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -46,14 +47,16 @@ import org.voltcore.utils.Pair;
 import org.voltcore.zk.BabySitter;
 import org.voltcore.zk.LeaderElector;
 import org.voltcore.zk.ZKUtil;
+import org.voltdb.AbstractTopology;
 import org.voltdb.Promotable;
+import org.voltdb.ReplicationRole;
 import org.voltdb.TheHashinator;
 import org.voltdb.VoltDB;
 import org.voltdb.VoltZK;
-import org.voltdb.catalog.SnapshotSchedule;
 
 import com.google_voltpatches.common.collect.ImmutableMap;
 import com.google_voltpatches.common.collect.ImmutableSortedSet;
+import com.google_voltpatches.common.collect.Sets;
 import com.google_voltpatches.common.util.concurrent.SettableFuture;
 
 /**
@@ -138,14 +141,14 @@ public class LeaderAppointer implements Promotable
             // compute previously unseen HSId set in the callback list
             Set<Long> newHSIds = new HashSet<Long>(updatedHSIds);
             newHSIds.removeAll(m_replicas);
-            tmLog.debug("Newly seen replicas: " + CoreUtils.hsIdCollectionToString(newHSIds));
             // compute previously seen but now vanished from the callback list HSId set
             Set<Long> missingHSIds = new HashSet<Long>(m_replicas);
             missingHSIds.removeAll(updatedHSIds);
-            tmLog.debug("Newly dead replicas: " + CoreUtils.hsIdCollectionToString(missingHSIds));
-
-            tmLog.debug("Handling babysitter callback for partition " + m_partitionId + ": children: " +
-                    CoreUtils.hsIdCollectionToString(updatedHSIds));
+            if (tmLog.isDebugEnabled()) {
+                tmLog.debug("Handling babysitter callback for partition " + m_partitionId + ": children: " + CoreUtils.hsIdCollectionToString(updatedHSIds));
+                tmLog.debug(String.format("Newly seen replicas:%s,Newly dead replicas:%s", CoreUtils.hsIdCollectionToString(newHSIds),
+                        CoreUtils.hsIdCollectionToString(missingHSIds)));
+            }
             if (m_state.get() == AppointerState.CLUSTER_START) {
                 // We can't yet tolerate a host failure during startup.  Crash it all
                 if (missingHSIds.size() > 0) {
@@ -156,13 +159,31 @@ public class LeaderAppointer implements Promotable
                 // and gate leader assignment on that many copies showing up.
                 int replicaCount = m_kfactor + 1;
                 JSONArray parts;
+                Set<Integer> missingHosts = Sets.newHashSet();
                 try {
-                    parts = m_topo.getJSONArray("partitions");
+                    //A cluster may be started or recovered with missing hosts.
+                    //find all missing hosts, exclude the replica on this missing hosts
+                    JSONArray hosts = m_topo.getJSONArray(AbstractTopology.TOPO_HOSTS);
+                    for (int h = 0; h < hosts.length(); h++) {
+                        JSONObject host = hosts.getJSONObject(h);
+                        boolean isMissing = host.getBoolean(AbstractTopology.TOPO_HOST_MISSING);
+                        if (isMissing) {
+                            missingHosts.add(host.getInt(AbstractTopology.TOPO_HOST_ID));
+                        }
+                    }
+                    parts = m_topo.getJSONArray(AbstractTopology.TOPO_PARTITIONS);
                     for (int p = 0; p < parts.length(); p++) {
                         JSONObject aPartition = parts.getJSONObject(p);
-                        int pid = aPartition.getInt("partition_id");
-                        if (pid == m_partitionId) {
-                            replicaCount = aPartition.getJSONArray("replicas").length();
+                        if (m_partitionId == aPartition.getInt(AbstractTopology.TOPO_PARTITION_ID)) {
+                            JSONArray replicas = aPartition.getJSONArray(AbstractTopology.TOPO_REPLICA);
+                            replicaCount = replicas.length();
+                            //replica may be placed on a missing node. do not wait for the replica on missing hosts
+                            for (int r = 0; r < replicas.length(); r++) {
+                                if (missingHosts.contains(replicas.getInt(r))) {
+                                    replicaCount--;
+                                }
+                            }
+                            break;
                         }
                     }
                 } catch (JSONException e) {
@@ -170,13 +191,11 @@ public class LeaderAppointer implements Promotable
                 }
                 if (children.size() == replicaCount) {
                     m_currentLeader = assignLeader(m_partitionId, updatedHSIds);
-                }
-                else {
+                } else {
                     tmLog.info("Waiting on " + ((m_kfactor + 1) - children.size()) + " more nodes " +
                             "for k-safety before startup");
                 }
-            }
-            else {
+            } else {
                 Set<Integer> hostsOnRing = new HashSet<Integer>();
                 // Check for k-safety
                 if (!isClusterKSafe(hostsOnRing)) {
@@ -188,8 +207,10 @@ public class LeaderAppointer implements Promotable
                     VoltDB.crashGlobalVoltDB("Detected node failure during command log replay. Cluster will shut down.",
                                              false, null);
                 }
-                // If we are a DR replica and starting from a snapshot, check if that has completed
-                if (m_expectingDrSnapshot && m_snapshotSyncComplete.get() == false) {
+                // If we are still a DR replica (not promoted) and starting from a snapshot,
+                // check if that has completed
+                if (VoltDB.instance().getReplicationRole() == ReplicationRole.REPLICA &&
+                    m_expectingDrSnapshot && m_snapshotSyncComplete.get() == false) {
                     VoltDB.crashGlobalVoltDB("Detected node failure before DR sync snapshot completes. Cluster will shut down.",
                                              false, null);
                 }
@@ -264,7 +285,6 @@ public class LeaderAppointer implements Promotable
     public LeaderAppointer(HostMessenger hm,
                            int numberOfPartitions,
                            int kfactor,
-                           SnapshotSchedule partitionSnapshotSchedule,
                            JSONObject topology,
                            MpInitiator mpi,
                            KSafetyStats stats,
@@ -387,7 +407,6 @@ public class LeaderAppointer implements Promotable
             // appoint a new leader if the seeded one has actually failed
             Map<Integer, Long> masters = m_iv2masters.pointInTimeCache();
             tmLog.info("LeaderAppointer repairing with master set: " + CoreUtils.hsIdValueMapToString(masters));
-
             //Setting the map to non-null causes the babysitters to populate it when cleaning up partitions
             //We are only racing with ourselves in that the creation of a babysitter can trigger callbacks
             //that result in partitions being cleaned up. We don't have to worry about some other leader appointer.
@@ -464,12 +483,13 @@ public class LeaderAppointer implements Promotable
         if (m_state.get() == AppointerState.CLUSTER_START) {
             try {
                 // find master in topo
-                JSONArray parts = m_topo.getJSONArray("partitions");
+                JSONArray parts = m_topo.getJSONArray(AbstractTopology.TOPO_PARTITIONS);
                 for (int p = 0; p < parts.length(); p++) {
                     JSONObject aPartition = parts.getJSONObject(p);
-                    int pid = aPartition.getInt("partition_id");
+                    int pid = aPartition.getInt(AbstractTopology.TOPO_PARTITION_ID);
                     if (pid == partitionId) {
-                        masterHostId = aPartition.getInt("master");
+                        masterHostId = aPartition.getInt(AbstractTopology.TOPO_MASTER);
+                        break;
                     }
                 }
             }
@@ -496,7 +516,7 @@ public class LeaderAppointer implements Promotable
             }
         }
         tmLog.info("Appointing HSId " + CoreUtils.hsIdToString(masterHSId) + " as leader for partition " +
-                partitionId);
+                    partitionId);
         try {
             m_iv2appointees.put(partitionId, masterHSId);
         }
@@ -585,6 +605,10 @@ public class LeaderAppointer implements Promotable
         m_stats.setSafetySet(lackingReplication.build());
 
         return retval;
+    }
+
+    public NavigableSet<KSafetyStats.StatsPoint> getKSafetyStatsSet() {
+        return m_stats.getSafetySet();
     }
 
     private void removeAndCleanupPartition(int pid) {

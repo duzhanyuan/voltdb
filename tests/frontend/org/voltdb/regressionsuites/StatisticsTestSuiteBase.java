@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -43,9 +43,17 @@ public class StatisticsTestSuiteBase extends SaveRestoreBase {
     protected final static int HOSTS = 3;
     protected final static int KFACTOR = MiscUtils.isPro() ? 1 : 0;
     protected final static int PARTITIONS = (SITES * HOSTS) / (KFACTOR + 1);
+    protected final static String jarName = "statistics-cluster.jar";
     protected final static boolean hasLocalServer = false;
     protected static StringBuilder m_recentAnalysis = null;
     protected final static int FSYNC_INTERVAL_GOLD = 50;
+
+    protected final static String drSchema =
+            "CREATE TABLE EMPLOYEE (\n"
+                    +   "E_ID INTEGER NOT NULL,\n"
+                    +   "E_AGE INTEGER NOT NULL"
+                    +   ");\n"
+                    +   "DR TABLE EMPLOYEE;\n";
 
     protected static final Class<?>[] PROCEDURES
             = {
@@ -78,7 +86,7 @@ public class StatisticsTestSuiteBase extends SaveRestoreBase {
     private int countHostsProvidingRows(VoltTable result, Map<String, String> columnTargets,
             boolean enforceUnique) {
         result.resetRowPosition();
-        Set<Long> hostsSeen = new HashSet<Long>();
+        Set<Long> hostsSeen = new HashSet<>();
         while (result.advanceRow()) {
             if (checkRowForMultipleTargets(result, columnTargets)) {
                 Long thisHostId = result.getLong("HOST_ID");
@@ -100,7 +108,7 @@ public class StatisticsTestSuiteBase extends SaveRestoreBase {
         if (HOSTS != hostsSeen.size()) {
             m_recentAnalysis = new StringBuilder();
             m_recentAnalysis.append("Failure follows from these results:\n");
-            Set<Long> seenAgain = new HashSet<Long>();
+            Set<Long> seenAgain = new HashSet<>();
             result.resetRowPosition();
             while (result.advanceRow()) {
                 Long thisHostId = result.getLong("HOST_ID");
@@ -130,6 +138,7 @@ public class StatisticsTestSuiteBase extends SaveRestoreBase {
     // node has seen a procedure invocation for 'foo'
     protected void validateRowSeenAtAllHosts(VoltTable result, Map<String, String> columnTargets,
             boolean enforceUnique) {
+        result.resetRowPosition();
         int hostCount = countHostsProvidingRows(result, columnTargets, enforceUnique);
         assertEquals(claimRecentAnalysis(), HOSTS, hostCount);
     }
@@ -137,7 +146,7 @@ public class StatisticsTestSuiteBase extends SaveRestoreBase {
     protected boolean validateRowSeenAtAllSites(VoltTable result, String columnName, String targetValue,
             boolean enforceUnique) {
         result.resetRowPosition();
-        Set<Long> sitesSeen = new HashSet<Long>();
+        Set<Long> sitesSeen = new HashSet<>();
         while (result.advanceRow()) {
             String colValFromRow = result.getString(columnName);
             if (targetValue.equalsIgnoreCase(colValFromRow)) {
@@ -177,12 +186,20 @@ public class StatisticsTestSuiteBase extends SaveRestoreBase {
         assertEquals(PARTITIONS, partsSeen.size());
     }
 
+    static public Test suite(Class classzz, boolean isCommandLogTest) throws IOException {
+        return suite(classzz, isCommandLogTest, -1);
+    }
+
     //
     // Build a list of the tests to be run. Use the regression suite
     // helpers to allow multiple backends.
     // JUnit magic that uses the regression suite helper classes.
     //
-    static public Test suite(Class classzz, boolean isCommandLogTest) throws IOException {
+    static public Test suite(Class classzz, boolean isCommandLogTest, int replicationPort) throws IOException {
+        return suite(classzz, isCommandLogTest, replicationPort, true);
+    }
+
+    static public Test suite(Class classzz, boolean isCommandLogTest, int replicationPort, boolean reuseServer) throws IOException {
         VoltServerConfig config = null;
 
         MultiConfigSuiteBuilder builder
@@ -232,7 +249,7 @@ public class StatisticsTestSuiteBase extends SaveRestoreBase {
          * simulated through LocalCluster -- all the hosts have the same HOSTNAME, just different host ids.
          * So, these tests shouldn't rely on the usual uniqueness of host names in a cluster.
          */
-        config = new LocalCluster("statistics-cluster.jar", StatisticsTestSuiteBase.SITES,
+        config = new LocalCluster(jarName, StatisticsTestSuiteBase.SITES,
                 StatisticsTestSuiteBase.HOSTS, StatisticsTestSuiteBase.KFACTOR,
                 BackendTarget.NATIVE_EE_JNI);
         ((LocalCluster) config).setHasLocalServer(hasLocalServer);
@@ -242,9 +259,17 @@ public class StatisticsTestSuiteBase extends SaveRestoreBase {
             ((LocalCluster) config).setJavaProperty("LOG_SEGMENTS", "1");
         }
 
+        if (replicationPort > 0) {
+            // cluster id is default to 0
+            project.addLiteralSchema(drSchema);
+            project.setDrProducerEnabled();
+            ((LocalCluster) config).setReplicationPort(replicationPort);
+            ((LocalCluster) config).overrideAnyRequestForValgrind();
+        }
+
         boolean success = config.compile(project);
         assertTrue(success);
-        builder.addServerConfig(config);
+        builder.addServerConfig(config, reuseServer);
 
         return builder;
     }

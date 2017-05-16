@@ -1,5 +1,5 @@
 /* This file is part of VoltDB.
- * Copyright (C) 2008-2016 VoltDB Inc.
+ * Copyright (C) 2008-2017 VoltDB Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -25,7 +25,6 @@ import org.apache.commons.lang3.ArrayUtils;
 import org.voltcore.logging.VoltLogger;
 import org.voltdb.VoltTable.ColumnInfo;
 import org.voltdb.catalog.Cluster;
-import org.voltdb.catalog.Procedure;
 import org.voltdb.client.ClientResponse;
 import org.voltdb.dtxn.DtxnConstants;
 import org.voltdb.dtxn.TransactionState;
@@ -33,11 +32,12 @@ import org.voltdb.dtxn.UndoAction;
 import org.voltdb.iv2.MpTransactionState;
 import org.voltdb.messaging.FragmentTaskMessage;
 import org.voltdb.settings.ClusterSettings;
+import org.voltdb.settings.NodeSettings;
 
 import com.google_voltpatches.common.primitives.Longs;
 
 /**
- * System procedures extend VoltSystemProcedure and use its utility methods to
+ * System procedures extend VoltProcedure and use its utility methods to
  * create work in the system. This functionality is not available to standard
  * user procedures (which extend VoltProcedure).
  */
@@ -65,11 +65,10 @@ public abstract class VoltSystemProcedure extends VoltProcedure {
     protected static long STATUS_OK = 0L;
     protected static long STATUS_FAILURE = 1L;
 
-    protected Procedure m_catProc;
     protected Cluster m_cluster;
-    protected ClusterSettings m_settings;
+    protected ClusterSettings m_clusterSettings;
+    protected NodeSettings m_nodeSettings;
     protected SiteProcedureConnection m_site;
-    private LoadedProcedureSet m_loadedProcedureSet;
     protected ProcedureRunner m_runner; // overrides private parent var
 
     /**
@@ -104,23 +103,20 @@ public abstract class VoltSystemProcedure extends VoltProcedure {
     }
 
     void initSysProc(SiteProcedureConnection site,
-            LoadedProcedureSet loadedProcedureSet,
-            Procedure catProc, Cluster cluster,
-            ClusterSettings settings) {
+            Cluster cluster,
+            ClusterSettings clusterSettings,
+            NodeSettings nodeSettings) {
 
         m_site = site;
-        m_catProc = catProc;
         m_cluster = cluster;
-        m_settings = settings;
-        m_loadedProcedureSet = loadedProcedureSet;
-
-        init();
+        m_clusterSettings = clusterSettings;
+        m_nodeSettings = nodeSettings;
     }
 
     /**
-     * For Sysproc init tasks like registering plan frags
+     * return all SysProc plan fragments that needs to be registered
      */
-    abstract public void init();
+    abstract public long[] getPlanFragmentIds();
 
     /** Bundles the data needed to describe a plan fragment. */
     public static class SynthesizedPlanFragment {
@@ -248,15 +244,6 @@ public abstract class VoltSystemProcedure extends VoltProcedure {
                                                          task);
             }
         }
-    }
-
-    // It would be nicer if init() on a sysproc was really "getPlanFragmentIds()"
-    // and then the loader could ask for the ids directly instead of stashing
-    // its reference here and inverting the relationship between loaded procedure
-    // set and system procedure.
-    public void registerPlanFragment(long fragmentId) {
-        assert(m_runner != null);
-        m_loadedProcedureSet.registerPlanFragment(fragmentId, m_runner);
     }
 
     protected void noteOperationalFailure(String errMsg) {

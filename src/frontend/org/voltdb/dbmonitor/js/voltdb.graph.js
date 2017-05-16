@@ -2,13 +2,14 @@
 (function (window) {
 
     var IMonitorGraphUI = (function () {
-
+        var RETAINED_TIME_INTERVAL = 60; //60 means graph data within 60 minutes time interval will be stored in local storage.
         var currentView = "Seconds";
+        var currentViewDr = "Seconds";
+        var currentViewImporter = "Seconds"
         var cpuSecCount = 0;
         var cpuMinCount = 0;
         var cmdLogSecCount = 0;
         var cmdLogMinCount = 0;
-
         var tpsSecCount = 0;
         var tpsMinCount = 0;
         var memSecCount = 0;
@@ -19,6 +20,12 @@
         var partitionMinCount = 0;
         var drSecCount = 0;
         var drMinCount = 0;
+        var outTransSecCount = 0;
+        var outTransMinCount = 0;
+        var successRateSecCount = 0;
+        var successRateMinCount = 0;
+        var failureRateSecCount = 0;
+        var failureRateMinCount = 0;
         var totalEmptyData = 121;
         var totalEmptyDataForMinutes = 121;
         var totalEmptyDataForDays = 360;
@@ -27,24 +34,60 @@
         var latencyChart;
         var transactionChart;
         var partitionChart;
-        var drReplicationChart;        var cmdLogChart;        var cmdLogOverlay = [];        var physicalMemory = -1;
-        this.Monitors = {};
-        this.ChartCpu = nv.models.lineChart();
-        this.ChartRam = nv.models.lineChart();
-        this.ChartLatency = nv.models.lineChart();
-        this.ChartTransactions = nv.models.lineChart();
-        this.ChartPartitionIdleTime = nv.models.lineChart();
-        this.ChartDrReplicationRate = nv.models.lineChart();        this.ChartCommandlog = nv.models.lineChart();        var dataMapperSec = {};
+        var drReplicationChart;
+        var outTransChart;
+        var successRateChart;
+        var failureRateChart;
+        var drReplicationCharts = {};
+        var cmdLogChart;
+        var cmdLogOverlay = [];
+        var cmdLogOverlayMin = [];
+        var cmdLogOverlayDay = [];
+        var physicalMemory = -1;
+        var Monitors = {};
+        var ChartCpu = nv.models.lineChart();
+        var ChartRam = nv.models.lineChart();
+        var ChartLatency = nv.models.lineChart();
+        var ChartTransactions = nv.models.lineChart();
+        var ChartPartitionIdleTime = nv.models.lineChart();
+        var ChartDrReplicationRate = nv.models.lineChart();
+        var ChartOutTrans = nv.models.lineChart();
+        var ChartSuccessRate =  nv.models.lineChart();
+        var ChartFailureRate = nv.models.lineChart();
+        var drChartList = {}
+        var ChartCommandlog = nv.models.lineChart();
+        var dataMapperSec = {};
         var dataMapperMin = {};
         var dataMapperDay = {};
+
+        var dataMapperImporterSec = {};
+        var dataMapperImporterMin = {};
+        var dataMapperImporterDay = {};
+
+        var previousSuccessRate = {};
+        var previousFailureRate = {};
+
         this.enumPartitionColor = {
             localPartition: "#D3D3D3",
             maxMinPartition: "#4C76B0",
             multiPartition: "#FF8C00"
         }
+
+        var colorList = ["#A48805", "#1B87C8", "#D3D3D3", "#4C76B0", "#FF8C00", "#468706", "#C70000", "#544a48", "#AA4567", "#783300"]
+
+        this.enumMaxTimeGap = {
+            secGraph: 300000,
+            minGraph: 1800000,
+            dayGraph: 27000000
+        }
         this.GetPartitionDetailData = function (partitionDetails) {
             dataParitionDetails = partitionDetails;
         };
+
+        var dataImporterDetails = [];
+        this.SetImporterData = function(importerDetails){
+            dataImporterDetails= importerDetails;
+        }
 
         function getEmptyData() {
             var arr = [];
@@ -80,6 +123,56 @@
             }
 
             return arr;
+        }
+
+        function getRandomColor() {
+            var letters = '0123456789ABCDEF';
+            var color = '#';
+            for (var i = 0; i < 6; i++ ) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+
+        this.getImportMapperData = function(){
+            return dataMapperImporterSec;
+        }
+
+        function getImportData(emptyData, dataMapper){
+            var count = 0;
+            var dataImporterSuccess = [];
+            var dataImporterFailures = [];
+            var dataImporterOutTrans = [];
+            if(dataImporterDetails != undefined){
+                $.each(dataImporterDetails, function(key, value){
+                    if(key == "SUCCESSES" || key == "FAILURES" || key == "OUTSTANDING_REQUESTS"){
+                        var colorIndex = -1;
+                        var prevKey = ""
+                        $.each(value, function(dataType, dataTypeValue){
+                            if(dataType != "TIMESTAMP"){
+                                var arr = [];
+                                arr.push(emptyData[0]);
+                                arr.push(emptyData[emptyData.length - 1]);
+                                if(prevKey != key){
+                                    colorIndex = 0;
+                                    prevKey = key;
+                                }
+                                if (key == "SUCCESSES"){
+                                    dataImporterSuccess.push({ key: dataType, values: arr, color: colorList[colorIndex] })
+                                    dataMapper[dataType] = count;
+                                    count++;
+                                } else if (key == "FAILURES"){
+                                    dataImporterFailures.push({ key: dataType, values: arr, color: colorList[colorIndex] })
+                                } else if (key == "OUTSTANDING_REQUESTS"){
+                                    dataImporterOutTrans.push({ key: dataType, values: arr, color: colorList[colorIndex] })
+                                }
+                                colorIndex++;
+                            }
+                        });
+                    }
+                });
+            }
+            return {SUCCESSES: dataImporterSuccess, FAILURES: dataImporterFailures, OUTSTANDING_REQUESTS: dataImporterOutTrans}
         }
 
         function getEmptyDataForPartition() {
@@ -195,6 +288,24 @@
             "color": "rgb(164, 136, 5)"
         }];
 
+        var dataOutTrans = [{
+            "key": "Outstanding Transactions",
+            "values": getEmptyDataOptimized(),
+            "color": "rgb(164, 136, 5)"
+        }];
+
+        var dataSuccessRate = [{
+            "key": "Success Rate",
+            "values": getEmptyDataOptimized(),
+            "color": "rgb(164, 136, 5)"
+        }];
+
+        var dataFailureRate = [{
+            "key": "Failure Rate",
+            "values": getEmptyDataOptimized(),
+            "color": "rgb(27, 135, 200)"
+        }];
+
         var dataRam = [{
             "key": "RAM",
             "values": getEmptyDataOptimized(),
@@ -219,6 +330,8 @@
             "color": "rgb(27, 135, 200)"
         }];
 
+        var dataDrReplication = {}
+
         var dataCommandLog = [{
             "key": "Command Log Statistics",
             "values": getEmptyDataOptimized(),
@@ -231,311 +344,296 @@
 
         nv.addGraph({
             generate: function() {
-                MonitorGraphUI.ChartCpu.xAxis
+                ChartCpu.xAxis
                 .tickFormat(function (d) {
                     return d3.time.format('%X')(new Date(d));
                 });
 
-                MonitorGraphUI.ChartCpu.xAxis.rotateLabels(-20);
+                ChartCpu.xAxis.rotateLabels(-20);
 
-               MonitorGraphUI.ChartCpu.yAxis
+                ChartCpu.yAxis
                     .tickFormat(d3.format(',.2f'));
 
-                MonitorGraphUI.ChartCpu.yAxis
+                ChartCpu.yAxis
                     .axisLabel('(%)')
                     .axisLabelDistance(10);
-                
-                MonitorGraphUI.ChartCpu.margin({ left: 100 });
-                MonitorGraphUI.ChartCpu.yAxis.scale().domain([0, 100]);
-                MonitorGraphUI.ChartCpu.lines.forceY([0, 100]);
+
+                ChartCpu.margin({ left: 100 });
+                ChartCpu.yAxis.scale().domain([0, 100]);
+                ChartCpu.lines.forceY([0, 100]);
 
                 d3.select('#visualisationCpu')
                     .datum(dataCpu)
                     .transition().duration(500)
-                    .call(MonitorGraphUI.ChartCpu);
+                    .call(ChartCpu);
 
-                nv.utils.windowResize(MonitorGraphUI.ChartCpu.update);
-                
-                return MonitorGraphUI.ChartCpu;
+                nv.utils.windowResize(ChartCpu.update);
+
+                return ChartCpu;
             },
             callback: function (p) {
-                MonitorGraphUI.ChartCpu.useInteractiveGuideline(true);
-                //var tooltip = MonitorGraphUI.ChartCpu.tooltip;
-                //tooltip.gravity('s');
-                //tooltip.contentGenerator(function (d) {
-                //    var html = '';
-                //    d.series.forEach(function (elem) {
-                //        html += "<h3>"
-                //            + elem.key + "</h3>";
-                //    });
-                //    html = html + "<h2>" + parseFloat(d.point.y).toFixed(2) + "% at " + d3.time.format('%d %b %X')(new Date(d.point.x)) + "</h2>";
-
-                //    return html;
-                //});
-                return MonitorGraphUI.ChartCpu;
+                ChartCpu.useInteractiveGuideline(true);
+                return ChartCpu;
             }
         });
 
         nv.addGraph({
             generate: function() {
-                MonitorGraphUI.ChartRam.xAxis
-              .tickFormat(function (d) {
-                  return d3.time.format('%X')(new Date(d));
-              });
+                ChartRam.xAxis
+                    .tickFormat(function (d) {
+                      return d3.time.format('%X')(new Date(d));
+                    });
 
-                MonitorGraphUI.ChartRam.xAxis.rotateLabels(-20);
+                ChartRam.xAxis.rotateLabels(-20);
 
-                MonitorGraphUI.ChartRam.yAxis
+                ChartRam.yAxis
                     .tickFormat(d3.format(',.4f'));
 
-                MonitorGraphUI.ChartRam.yAxis
+                ChartRam.yAxis
                     .axisLabel('(GB)')
                     .axisLabelDistance(10);
 
-                MonitorGraphUI.ChartRam.margin({ left: 100 });
-                MonitorGraphUI.ChartRam.lines.forceY([0, 0.1]);
+                ChartRam.margin({ left: 100 });
+                ChartRam.lines.forceY([0, 0.1]);
 
                 d3.select('#visualisationRam')
                     .datum(dataRam)
                     .transition().duration(500)
-                    .call(MonitorGraphUI.ChartRam);
+                    .call(ChartRam);
 
-                nv.utils.windowResize(MonitorGraphUI.ChartRam.update);
+                nv.utils.windowResize(ChartRam.update);
             },
             callback: function (p) {
-                MonitorGraphUI.ChartRam.useInteractiveGuideline(true);
-                //var tooltip = MonitorGraphUI.ChartRam.tooltip;
-
-                //tooltip.contentGenerator(function (d) {
-                //    var html = '';
-                //    d.series.forEach(function (elem) {
-                //        html += "<h3>"
-                //            + elem.key + "</h3>";
-                //    });
-                //    html = html + "<h2>" + parseFloat(d.point.y).toFixed(4) + " GB at " + d3.time.format('%d %b %X')(new Date(d.point.x)) + "</h2>";
-
-                //    return html;
-                //});
-
-                return MonitorGraphUI.ChartCpu;
+                ChartRam.useInteractiveGuideline(true);
+                return ChartCpu;
             }
         });
 
         nv.addGraph({
             generate: function() {
-                MonitorGraphUI.ChartLatency.xAxis
-              .tickFormat(function (d) {
-                  return d3.time.format('%X')(new Date(d));
-              });
+                ChartLatency.xAxis
+                    .tickFormat(function (d) {
+                      return d3.time.format('%X')(new Date(d));
+                    });
 
-                MonitorGraphUI.ChartLatency.xAxis.rotateLabels(-20);
+                ChartLatency.xAxis.rotateLabels(-20);
 
-                MonitorGraphUI.ChartLatency.yAxis
+                ChartLatency.yAxis
                     .tickFormat(d3.format(',.2f'));
 
-                MonitorGraphUI.ChartLatency.yAxis
+                ChartLatency.yAxis
                     .axisLabel('(ms)')
                     .axisLabelDistance(10);
 
-                MonitorGraphUI.ChartLatency.margin({ left: 100 });
-                MonitorGraphUI.ChartLatency.lines.forceY([0, 1]);
+                ChartLatency.margin({ left: 100 });
+                ChartLatency.lines.forceY([0, 1]);
 
                 d3.select('#visualisationLatency')
                     .datum(dataLatency)
                     .transition().duration(500)
-                    .call(MonitorGraphUI.ChartLatency);
+                    .call(ChartLatency);
 
-                nv.utils.windowResize(MonitorGraphUI.ChartLatency.update);
+                nv.utils.windowResize(ChartLatency.update);
             },
             callback: function(p) {
-                MonitorGraphUI.ChartLatency.useInteractiveGuideline(true);
-                //var tooltip = MonitorGraphUI.ChartLatency.tooltip;
-               
-                //tooltip.contentGenerator(function (d) {
-                //    var html = '';
-                //    d.series.forEach(function (elem) {
-                //        html += "<h3>"
-                //            + elem.key + "</h3>";
-                //    });
-                //    html = html + "<h2>" + parseFloat(d.point.y).toFixed(2) + " ms at " + d3.time.format('%d %b %X')(new Date(d.point.x)) + "</h2>";
-
-                //    //d.series.forEach(function (elem) {
-                //    //    html += "<table><tr><td colspan='3'><strong class='x=value'>" + d3.time.format('%d %b %X')(new Date(d.point.x)) + "</strong></td></tr></thead>" +
-                //    //        "<tbody><tr><td class='legend-color-guide'><div style='background-color: rgb(27,135,200);'</div></td><td class='key'>Latency</td><td class='value'>" + parseFloat(d.point.y).toFixed(2) + "</td></tr></tbody>";
-                //    //});
-    
-                //    return html;
-                //});
-                return MonitorGraphUI.ChartLatency;
+                ChartLatency.useInteractiveGuideline(true);
+                return ChartLatency;
             }
         });
 
+        nv.addGraph({
+            generate: function() {
+                ChartTransactions.xAxis
+                    .tickFormat(function (d) {
+                      return d3.time.format('%X')(new Date(d));
+                    });
 
-        nv.addGraph({            
-           generate: function() {
-               MonitorGraphUI.ChartTransactions.xAxis
-              .tickFormat(function (d) {
-                  return d3.time.format('%X')(new Date(d));
-              });
+                ChartTransactions.xAxis.rotateLabels(-20);
 
-               
-               MonitorGraphUI.ChartTransactions.xAxis.rotateLabels(-20);
-
-               MonitorGraphUI.ChartTransactions.yAxis
+                ChartTransactions.yAxis
                    .tickFormat(d3.format(',.2f'));
 
-               MonitorGraphUI.ChartTransactions.yAxis
+                ChartTransactions.yAxis
                    .axisLabel('(Transactions/s)')
                    .axisLabelDistance(10);
 
-               MonitorGraphUI.ChartTransactions.margin({ left: 100 });
-               MonitorGraphUI.ChartTransactions.lines.forceY([0, 1]);
+                ChartTransactions.margin({ left: 100 });
+                ChartTransactions.lines.forceY([0, 1]);
 
-               d3.select('#visualisationTransaction')
+                d3.select('#visualisationTransaction')
                    .datum(dataTransactions)
                    .transition().duration(500)
-                   .call(MonitorGraphUI.ChartTransactions);
+                   .call(ChartTransactions);
 
-               nv.utils.windowResize(MonitorGraphUI.ChartTransactions.update);
+                nv.utils.windowResize(ChartTransactions.update);
            },
            callback: function(p) {
-               MonitorGraphUI.ChartTransactions.useInteractiveGuideline(true);
-               //var tooltip = MonitorGraphUI.ChartTransactions.tooltip;
-               //tooltip.contentGenerator(function (d) {
-               //    var html = '';
-               //    d.series.forEach(function (elem) {
-               //        html += "<h3>"
-               //            + elem.key + "</h3>";
-               //    });
-               //    html = html + "<h2>" + parseFloat(d.point.y).toFixed(2) + " tps at " + d3.time.format('%d %b %X')(new Date(d.point.x)) + "</h2>";
-
-               //    return html;
-               //});
-               return MonitorGraphUI.ChartTransactions;
+               ChartTransactions.useInteractiveGuideline(true);
+               return ChartTransactions;
            }
         });
 
-
-        nv.addGraph({            
-            generate:function() {
-                MonitorGraphUI.ChartPartitionIdleTime.xAxis
-                .tickFormat(function (d) {
-                    return d3.time.format('%X')(new Date(d));
-                });
-
-                MonitorGraphUI.ChartPartitionIdleTime.showLegend(false);
-                MonitorGraphUI.ChartPartitionIdleTime.xAxis.rotateLabels(-20);
-
-                MonitorGraphUI.ChartPartitionIdleTime.yAxis
-                    .tickFormat(d3.format(',.2f'));
-
-                MonitorGraphUI.ChartPartitionIdleTime.yAxis
-                    .axisLabel('(%)')
-                    .axisLabelDistance(10);
-
-                MonitorGraphUI.ChartPartitionIdleTime.margin({ left: 100 });
-                MonitorGraphUI.ChartPartitionIdleTime.yAxis.scale().domain([0, 100]);
-                MonitorGraphUI.ChartPartitionIdleTime.lines.forceY([0, 100]);
-
-                d3.select('#visualisationPartitionIdleTime')
-                    .datum([])
-                    .transition().duration(500)
-                    .call(MonitorGraphUI.ChartPartitionIdleTime);
-
-                nv.utils.windowResize(MonitorGraphUI.ChartPartitionIdleTime.update);
-            },
-            callback: function () {
-                MonitorGraphUI.ChartPartitionIdleTime.useInteractiveGuideline(true);
-                return MonitorGraphUI.ChartPartitionIdleTime;
-            }
-        });
-
-
         nv.addGraph({
             generate:function() {
-                MonitorGraphUI.ChartDrReplicationRate.xAxis
-               .tickFormat(function (d) {
-                   return d3.time.format('%X')(new Date(d));
-               });
-
-                MonitorGraphUI.ChartDrReplicationRate.xAxis.rotateLabels(-20);
-
-                MonitorGraphUI.ChartDrReplicationRate.yAxis
-                    .tickFormat(d3.format(',.2f'));
-
-                MonitorGraphUI.ChartDrReplicationRate.yAxis
-                    .axisLabel('(KBps)')
-                    .axisLabelDistance(10);
-
-                MonitorGraphUI.ChartDrReplicationRate.margin({ left: 100 });
-                MonitorGraphUI.ChartDrReplicationRate.lines.forceY([0, 1]);
-
-                d3.select('#visualizationDrReplicationRate')
-                    .datum(dataDrReplicationRate)
-                    .transition().duration(500)
-                    .call(MonitorGraphUI.ChartDrReplicationRate);
-
-                nv.utils.windowResize(MonitorGraphUI.ChartDrReplicationRate.update);
-            },
-            callback: function() {
-                MonitorGraphUI.ChartDrReplicationRate.useInteractiveGuideline(true);
-                //var tooltip = MonitorGraphUI.ChartDrReplicationRate.tooltip;
-                //tooltip.contentGenerator(function (d) {
-                //    debugger;
-                //    var html = '';
-                //    d.series.forEach(function (elem) {
-                //        html += "<h3>"
-                //            + elem.key + "</h3>";
-                //    });
-                //    html = html + "<h2>" + parseFloat(d.point.y).toFixed(2) + " KBps at " + d3.time.format('%d %b %X')(new Date(d.point.x)) + "</h2>";
-                //    return html;
-                //});
-                return MonitorGraphUI.ChartDrReplicationRate;
-            }
-        });
-
-
-        nv.addGraph({            
-            generate: function () {
-                MonitorGraphUI.ChartCommandlog.showLegend(false);
-                MonitorGraphUI.ChartCommandlog.xAxis
+                ChartPartitionIdleTime.xAxis
                     .tickFormat(function (d) {
                         return d3.time.format('%X')(new Date(d));
                     });
 
-                MonitorGraphUI.ChartCommandlog.xAxis.rotateLabels(-20);
+                ChartPartitionIdleTime.showLegend(false);
+                ChartPartitionIdleTime.xAxis.rotateLabels(-20);
 
-                MonitorGraphUI.ChartCommandlog.yAxis
+                ChartPartitionIdleTime.yAxis
                     .tickFormat(d3.format(',.2f'));
 
-                MonitorGraphUI.ChartCommandlog.yAxis
+                ChartPartitionIdleTime.yAxis
+                    .axisLabel('(%)')
+                    .axisLabelDistance(10);
+
+                ChartPartitionIdleTime.margin({ left: 100 });
+                ChartPartitionIdleTime.yAxis.scale().domain([0, 100]);
+                ChartPartitionIdleTime.lines.forceY([0, 100]);
+
+                d3.select('#visualisationPartitionIdleTime')
+                    .datum([])
+                    .transition().duration(500)
+                    .call(ChartPartitionIdleTime);
+
+                nv.utils.windowResize(ChartPartitionIdleTime.update);
+            },
+            callback: function () {
+                ChartPartitionIdleTime.useInteractiveGuideline(true);
+                return ChartPartitionIdleTime;
+            }
+        });
+
+        nv.addGraph({
+            generate: function () {
+                ChartCommandlog.showLegend(false);
+
+                ChartCommandlog.xAxis
+                    .tickFormat(function (d) {
+                        return d3.time.format('%X')(new Date(d));
+                    });
+
+                ChartCommandlog.xAxis.rotateLabels(-20);
+
+                ChartCommandlog.yAxis
+                    .tickFormat(d3.format(',.2f'));
+
+                ChartCommandlog.yAxis
                     .axisLabel('(Pending Transactions)')
                     .axisLabelDistance(10);
 
-                MonitorGraphUI.ChartCommandlog.margin({ left: 100 });
-                MonitorGraphUI.ChartCommandlog.lines.forceY([0, 0.1]);
+                ChartCommandlog.margin({ left: 100 });
+                ChartCommandlog.lines.forceY([0, 0.1]);
 
                 d3.select('#visualisationCommandLog')
                     .datum(dataCommandLog)
                     .transition().duration(500)
-                    .call(MonitorGraphUI.ChartCommandlog);
+                    .call(ChartCommandlog);
 
-                nv.utils.windowResize(MonitorGraphUI.ChartCommandlog.update);
+                nv.utils.windowResize(ChartCommandlog.update);
            },
-            callback:function() {
-               MonitorGraphUI.ChartCommandlog.useInteractiveGuideline(true);
-               //var tooltip = MonitorGraphUI.ChartCommandlog.tooltip;
-               //tooltip.contentGenerator(function (d) {
-               //    var html = '';
-               //    d.series.forEach(function (elem) {
-               //        html += "<h3>"
-               //            + elem.key + "</h3>";
-               //    });
-               //    html = html + "<h2>" + parseFloat(d.point.y).toFixed(2) + " Pending at " + d3.time.format('%d %b %X')(new Date(d.point.x)) + "</h2>";
+           callback:function() {
+               ChartCommandlog.useInteractiveGuideline(true);
+               return ChartCommandlog;
+           }
+        });
 
-               //    return html;
-               //});
-               return MonitorGraphUI.ChartCommandlog;
+        nv.addGraph({
+            generate: function () {
+                ChartOutTrans.xAxis
+                    .tickFormat(function (d) {
+                        return d3.time.format('%X')(new Date(d));
+                    });
+
+                ChartOutTrans.xAxis.rotateLabels(-20);
+
+                ChartOutTrans.yAxis
+                    .tickFormat(d3.format(',.2f'));
+
+                ChartOutTrans.yAxis
+                    .axisLabel('(Transactions)')
+                    .axisLabelDistance(10);
+
+                ChartOutTrans.margin({ left: 100 });
+                ChartOutTrans.lines.forceY([0, 0.1]);
+
+                d3.select('#visualisationOutTrans')
+                    .datum([])
+                    .transition().duration(500)
+                    .call(ChartOutTrans);
+
+                nv.utils.windowResize(ChartOutTrans.update);
+           },
+           callback:function() {
+               ChartOutTrans.useInteractiveGuideline(true);
+               return ChartOutTrans;
+           }
+        });
+
+        nv.addGraph({
+            generate: function () {
+                ChartSuccessRate.xAxis
+                    .tickFormat(function (d) {
+                        return d3.time.format('%X')(new Date(d));
+                    });
+
+                ChartSuccessRate.xAxis.rotateLabels(-20);
+
+                ChartSuccessRate.yAxis
+                    .tickFormat(d3.format(',.2f'));
+
+                ChartSuccessRate.yAxis
+                    .axisLabel('(Transactions/s)')
+                    .axisLabelDistance(10);
+
+                ChartSuccessRate.margin({ left: 100 });
+                ChartSuccessRate.lines.forceY([0, 0.1]);
+
+                d3.select('#visualisationSuccessRate')
+                    .datum([])
+                    .transition().duration(500)
+                    .call(ChartSuccessRate);
+
+                nv.utils.windowResize(ChartSuccessRate.update);
+           },
+           callback:function() {
+               ChartSuccessRate.useInteractiveGuideline(true);
+               return ChartSuccessRate;
+           }
+        });
+
+        nv.addGraph({
+            generate: function () {
+                ChartFailureRate.xAxis
+                    .tickFormat(function (d) {
+                        return d3.time.format('%X')(new Date(d));
+                    });
+
+                ChartFailureRate.xAxis.rotateLabels(-20);
+
+                ChartFailureRate.yAxis
+                    .tickFormat(d3.format(',.2f'));
+
+                ChartFailureRate.yAxis
+                    .axisLabel('(Transactions/s)')
+                    .axisLabelDistance(10);
+
+                ChartFailureRate.margin({ left: 100 });
+                ChartFailureRate.lines.forceY([0, 0.1]);
+
+                d3.select('#visualisationFailureRate')
+                    .datum([])
+                    .transition().duration(500)
+                    .call(ChartFailureRate);
+
+                nv.utils.windowResize(ChartFailureRate.update);
+           },
+           callback:function() {
+               ChartFailureRate.useInteractiveGuideline(true);
+               return ChartFailureRate;
            }
         });
 
@@ -551,141 +649,6 @@
             return n;
         };
 
-
-        function Histogram(lowestTrackableValue, highestTrackableValue, nSVD, totalCount) {
-            this.lowestTrackableValue = lowestTrackableValue;
-            this.highestTrackableValue = highestTrackableValue;
-            this.nSVD = nSVD;
-            this.totalCount = totalCount;
-            this.count = [];
-            this.init();
-        }
-
-        Histogram.prototype.init = function () {
-            var largestValueWithSingleUnitResolution = 2 * Math.pow(10, this.nSVD);
-            this.unitMagnitude = Math.floor(Math.log(this.lowestTrackableValue) / Math.log(2));
-            var subBucketCountMagnitude = Math.ceil(Math.log(largestValueWithSingleUnitResolution) / Math.log(2));
-            this.subBucketHalfCountMagnitude = ((subBucketCountMagnitude > 1) ? subBucketCountMagnitude : 1) - 1;
-            this.subBucketCount = Math.pow(2, (this.subBucketHalfCountMagnitude + 1));
-            this.subBucketHalfCount = this.subBucketCount / 2;
-            var subBucketMask = goog.math.Long.fromInt(this.subBucketCount - 1);
-            this.subBucketMask = subBucketMask.shiftLeft(this.unitMagnitude);
-            // Establish leadingZeroCountBase, used in getBucketIndex() fast path:
-            this.leadingZeroCountBase = 64 - this.unitMagnitude - this.subBucketHalfCountMagnitude - 1;
-            var trackableValue = (this.subBucketCount - 1) << this.unitMagnitude;
-            var bucketsNeeded = 1;
-            while (trackableValue < this.highestTrackableValue) {
-                trackableValue *= 2;
-                bucketsNeeded++;
-            }
-            this.bucketCount = bucketsNeeded;
-
-            this.countsArrayLength = (this.bucketCount + 1) * (this.subBucketCount / 2);
-        };
-
-        Histogram.prototype.diff = function (newer) {
-            var h = new Histogram(newer.lowestTrackableValue, newer.highestTrackableValue, newer.nSVD, newer.totalCount - this.totalCount);
-            for (var i = 0; i < h.countsArrayLength; i++) {
-                h.count[i] = newer.count[i] - this.count[i];
-            }
-            return h;
-        };
-
-        Histogram.prototype.getCountAt = function (bucketIndex, subBucketIndex) {
-            var bucketBaseIndex = (bucketIndex + 1) << this.subBucketHalfCountMagnitude;
-            var offsetInBucket = subBucketIndex - this.subBucketHalfCount;
-            var countIndex = bucketBaseIndex + offsetInBucket;
-            return this.count[countIndex];
-        };
-
-        Histogram.prototype.normalizeIndex = function (index, normalizingIndexOffset, arrayLength) {
-            if (normalizingIndexOffset == 0) {
-                // Fastpath out of normalization. Keeps integer value histograms fast while allowing
-                // others (like DoubleHistogram) to use normalization at a cost...
-                return index;
-            }
-            if ((index > arrayLength) || (index < 0)) {
-                throw new ArrayIndexOutOfBoundsException("index out of covered value range");
-            }
-            var normalizedIndex = index - normalizingIndexOffset;
-            // The following is the same as an unsigned remainder operation, as long as no double wrapping happens
-            // (which shouldn't happen, as normalization is never supposed to wrap, since it would have overflowed
-            // or underflowed before it did). This (the + and - tests) seems to be faster than a % op with a
-            // correcting if < 0...:
-            if (normalizedIndex < 0) {
-                normalizedIndex += arrayLength;
-            } else if (normalizedIndex >= arrayLength) {
-                normalizedIndex -= arrayLength;
-            }
-            return normalizedIndex;
-        };
-
-        Histogram.prototype.getCountAtIndex = function (index) {
-            return this.count[this.normalizeIndex(index, 0, this.countsArrayLength)];
-        };
-
-        Histogram.prototype.valueFromIndex2 = function (bucketIndex, subBucketIndex) {
-            return subBucketIndex * Math.pow(2, bucketIndex + this.unitMagnitude);
-        };
-
-        Histogram.prototype.valueFromIndex = function (index) {
-            var bucketIndex = (index >> this.subBucketHalfCountMagnitude) - 1;
-            var subBucketIndex = (index & (this.subBucketHalfCount - 1)) + this.subBucketHalfCount;
-            if (bucketIndex < 0) {
-                subBucketIndex -= this.subBucketHalfCount;
-                bucketIndex = 0;
-            }
-            return this.valueFromIndex2(bucketIndex, subBucketIndex);
-        };
-
-        Histogram.prototype.lowestEquivalentValue = function (value) {
-            var bucketIndex = this.getBucketIndex(value);
-            var subBucketIndex = this.getSubBucketIndex(value, bucketIndex);
-            var thisValueBaseLevel = this.valueFromIndex2(bucketIndex, subBucketIndex);
-            return thisValueBaseLevel;
-        };
-
-        Histogram.prototype.highestEquivalentValue = function (value) {
-            return this.nextNonEquivalentValue(value) - 1;
-        };
-
-        Histogram.prototype.highestEquivalentValue = function (value) {
-            return this.lowestEquivalentValue(value) + this.sizeOfEquivalentValueRange(value);
-        };
-
-        Histogram.prototype.sizeOfEquivalentValueRange = function (value) {
-            var bucketIndex = this.getBucketIndex(value);
-            var subBucketIndex = this.getSubBucketIndex(value, bucketIndex);
-            var distanceToNextValue =
-                (1 << ( this.unitMagnitude + ((subBucketIndex >= this.subBucketCount) ? (bucketIndex + 1) : bucketIndex)));
-            return distanceToNextValue;
-        };
-
-        Histogram.prototype.getBucketIndex = function (value) {
-            return this.leadingZeroCountBase - (goog.math.Long.fromNumber(value).or(this.subBucketMask)).numberOfLeadingZeros();
-        };
-
-        Histogram.prototype.getSubBucketIndex = function (value, bucketIndex) {
-            return  (value >>> (bucketIndex + this.unitMagnitude));
-        };
-
-        Histogram.prototype.getValueAtPercentile = function (percentile) {
-            var requestedPercentile = Math.min(percentile, 100.0); // Truncate down to 100%
-            var countAtPercentile = Math.floor(((percentile / 100.0) * this.totalCount) + 0.5); // round to nearest
-            countAtPercentile = Math.max(countAtPercentile, 1); // Make sure we at least reach the first recorded entry
-            var totalToCurrentIndex = 0;
-            for (var i = 0; i < this.countsArrayLength; i++) {
-                totalToCurrentIndex += this.getCountAtIndex(i);
-                if (totalToCurrentIndex >= countAtPercentile) {
-                    var valueAtIndex = this.valueFromIndex(i);
-                    return (percentile == 0.0) ?
-                        this.lowestEquivalentValue(valueAtIndex)/1000.0 :
-                        this.highestEquivalentValue(valueAtIndex)/1000.0;
-                }
-            }
-            return 0;
-        };
-
         function read32(str) {
             var s1 = str.substring(0, 2);
             var s2 = str.substring(2, 4);
@@ -698,35 +661,6 @@
             var s1 = read32(str);
             var s2 = read32(str.substring(8, 16));
             return s2 + s1;
-        }
-
-        function convert2Histogram(str) {
-            // Read lowestTrackableValue
-            var lowestTrackableValue = parseInt(read64(str), 16);
-            str = str.substring(16, str.length);
-
-            // Read highestTrackableValue
-            var highestTrackableValue = parseInt(read64(str), 16);
-            str = str.substring(16, str.length);
-
-            // Read numberOfSignificantValueDigits
-            var nSVD = parseInt(read32(str), 16);
-            str = str.substring(8, str.length);
-
-            // Read totalCount
-            var totalCount = parseInt(read64(str), 16);
-            str = str.substring(16, str.length);
-
-            var histogram = new Histogram(lowestTrackableValue, highestTrackableValue, nSVD, totalCount);
-
-            var i = 0;
-            while (str.length >= 16) {
-                var value = parseInt(read64(str), 16);
-                histogram.count[i] = value;
-                str = str.substring(16, str.length);
-                i++;
-            }
-            return histogram;
         }
 
         var getEmptyDataForView = function (view) {
@@ -751,6 +685,17 @@
             return getEmptyDataForPartition();
         };
 
+        var getEmptyDataForImporterView = function (view) {
+            view = view != undefined ? view.toLowerCase() : "seconds";
+
+            if (view == "minutes")
+                return getImportData(emptyDataForMinutes, dataMapperImporterMin);
+            else if (view == "days")
+                return getImportData(emptyDataForDays, dataMapperImporterDay);
+
+            return getImportData(emptyData, dataMapperImporterSec);
+        };
+
         this.AddGraph = function (view, cpuChartObj, ramChartObj, clusterChartObj, transactinoChartObj, partitionChartObj, drReplicationCharObj, cmdLogChartObj) {
             cpuChart = cpuChartObj;
             ramChart = ramChartObj;
@@ -759,7 +704,7 @@
             partitionChart = partitionChartObj;
             drReplicationChart = drReplicationCharObj;
             cmdLogChart = cmdLogChartObj;            currentView = view;
-            MonitorGraphUI.Monitors = {
+            Monitors = {
                 'latHistogram': {},
                 'latData': getEmptyDataOptimized(),
                 'latDataMin': getEmptyDataForMinutesOptimized(),
@@ -770,6 +715,7 @@
                 'tpsDataMin': getEmptyDataForMinutesOptimized(),
                 'tpsDataDay': getEmptyDataForDaysOptimized(),
                 'tpsFirstData': true,
+                'tpsMaxTimeStamp': null,
                 'memData': getEmptyDataOptimized(),
                 'memDataMin': getEmptyDataForMinutesOptimized(),
                 'memDataDay': getEmptyDataForDaysOptimized(),
@@ -785,118 +731,350 @@
                 'partitionDataDay': getEmptyDataForPartitionForDay(),
                 'partitionFirstData': true,
                 'partitionMaxTimeStamp':null,
-                'drReplicationData': getEmptyDataOptimized(),
-                'drReplicationDataMin': getEmptyDataForMinutesOptimized(),
-                'drReplicationDataDay': getEmptyDataForDaysOptimized(),
-                'drMaxTimeStamp': null,
                 'cmdLogData': getEmptyDataOptimized(),
                 'cmdLogDataMin': getEmptyDataForMinutesOptimized(),
                 'cmdLogDataDay': getEmptyDataForDaysOptimized(),
                 'cmdLogFirstData': true,
                 'cmdLogMaxTimeStamp': null,
-                'drFirstData': true,
                 'lastTimedTransactionCount': -1,
                 'lastTimerTick': -1
             };
-
             dataCpu[0]["values"] = getEmptyDataForView(view);
             dataRam[0]["values"] = getEmptyDataForView(view);
             dataLatency[0]["values"] = getEmptyDataForView(view);
             dataTransactions[0]["values"] = getEmptyDataForView(view);
             dataPartitionIdleTime = getEmptyDataForPartitionView(view);
-            dataDrReplicationRate[0]["values"] = getEmptyDataForView(view);
             dataCommandLog[0]["values"] = getEmptyDataForView(view);
             changeAxisTimeFormat(view);
+        };
+
+        this.InitializeDrData = function(){
+            var chartList = VoltDbUI.drChartList;
+            if(chartList != undefined && chartList.length > 0){
+                for(var i = 0; i < chartList.length; i++){
+                    dataDrReplication['dataDrReplication_' + chartList[i]] = [
+                        {
+                            "key": "Replication Rate",
+                            "values": getEmptyDataOptimized(),
+                            "color": "rgb(27, 135, 200)"
+                        }
+                    ];
+                }
+            }
+        }
+
+        this.AddDrGraph = function(view){
+            currentViewDr = view;
+            var chartList = VoltDbUI.drChartList;
+            if(chartList != undefined && chartList.length > 0){
+                for(var i = 0; i < chartList.length; i++){
+                    drReplicationCharts['ChartDrReplicationRate_' + chartList[i]] = $('#ChartDrReplicationRate_' + chartList[i]);
+                    Monitors['drReplicationData_' + chartList[i]] = getEmptyDataOptimized();
+                    Monitors['drReplicationDataMin_' + chartList[i]] = getEmptyDataForMinutesOptimized();
+                    Monitors['drReplicationDataDay_' + chartList[i]] = getEmptyDataForDaysOptimized();
+                    Monitors['drFirstData_' + chartList[i]] = true;
+                    Monitors['drMaxTimeStamp_' + chartList[i]] = null;
+                    Monitors['drSecCount_' + chartList[i]] = 0;
+                    Monitors['drMinCount_' + chartList[i]] = 0;
+                    dataDrReplication['dataDrReplication_' + chartList[i]][0]["values"] = getEmptyDataForView();
+                }
+            }
+            changeDrAxisTimeFormat(view)
+        }
+
+        this.AddImporterGraph = function (view, outTransChartObj, successRateChartObj, failureRateChartObj) {
+            outTransChart = outTransChartObj;
+            successRateChart = successRateChartObj;
+            failureRateChart = failureRateChartObj;
+            currentViewImporter = view;
+
+            Monitors['outTransData'] = getImportData(emptyData, dataMapperImporterSec)['OUTSTANDING_REQUESTS'];
+            Monitors['outTransDataMin'] = getImportData(emptyDataForMinutes, dataMapperImporterMin)['OUTSTANDING_REQUESTS'];
+            Monitors['outTransDataDay'] = getImportData(emptyDataForDays, dataMapperImporterDay)['OUTSTANDING_REQUESTS'];
+            Monitors['outTransFirstData'] = true;
+            Monitors['outTransMaxTimeStamp'] = null;
+
+            Monitors['successRateData'] = getImportData(emptyData, dataMapperImporterSec)['SUCCESSES'];
+            Monitors['successRateDataMin'] = getImportData(emptyDataForMinutes, dataMapperImporterMin)['SUCCESSES'];
+            Monitors['successRateDataDay'] = getImportData(emptyDataForDays, dataMapperImporterDay)['SUCCESSES'];
+            Monitors['successRateFirstData'] = true;
+            Monitors['successRateMaxTimeStamp'] = null;
+
+            Monitors['failureRateData'] = getImportData(emptyData, dataMapperImporterSec)['FAILURES'];
+            Monitors['failureRateDataMin'] = getImportData(emptyDataForMinutes, dataMapperImporterMin)['FAILURES'];
+            Monitors['failureRateDataDay'] = getImportData(emptyDataForDays, dataMapperImporterDay)['FAILURES'];
+            Monitors['failureRateFirstData'] = true;
+            Monitors['failureRateMaxTimeStamp'] = null;
+
+            dataOutTrans = getEmptyDataForImporterView(view)['OUTSTANDING_REQUESTS'];
+            dataSuccessRate = getEmptyDataForImporterView(view)['SUCCESSES'];
+            dataFailureRate = getEmptyDataForImporterView(view)['FAILURES'];
+
+            changeImporterAxisTimeFormat(view);
         };
 
         this.RefreshGraph = function (view) {
             currentView = view;
             if (view == 'Days') {
-                dataCpu[0]["values"] = MonitorGraphUI.Monitors.cpuDataHrs;
-                dataTransactions[0]["values"] = MonitorGraphUI.Monitors.tpsDataDay;
-                dataRam[0]["values"] = MonitorGraphUI.Monitors.memDataDay;
-                dataLatency[0]["values"] = MonitorGraphUI.Monitors.latDataDay;
-                dataPartitionIdleTime = MonitorGraphUI.Monitors.partitionDataDay;
-                dataDrReplicationRate[0]["values"] = MonitorGraphUI.Monitors.drReplicationDataDay;
-                dataCommandLog[0]["values"] = MonitorGraphUI.Monitors.cmdLogDataDay;
+                dataCpu[0]["values"] = Monitors.cpuDataHrs;
+                dataTransactions[0]["values"] = Monitors.tpsDataDay;
+                dataRam[0]["values"] = Monitors.memDataDay;
+                dataLatency[0]["values"] = Monitors.latDataDay;
+                dataPartitionIdleTime = Monitors.partitionDataDay;
+                dataCommandLog[0]["values"] = Monitors.cmdLogDataDay;
             } else if (view == 'Minutes') {
-                dataCpu[0]["values"] = MonitorGraphUI.Monitors.cpuDataMin;
-                dataTransactions[0]["values"] = MonitorGraphUI.Monitors.tpsDataMin;
-                dataRam[0]["values"] = MonitorGraphUI.Monitors.memDataMin;
-                dataLatency[0]["values"] = MonitorGraphUI.Monitors.latDataMin;
-                dataPartitionIdleTime = MonitorGraphUI.Monitors.partitionDataMin;
-                dataDrReplicationRate[0]["values"] = MonitorGraphUI.Monitors.drReplicationDataMin;
-                dataCommandLog[0]["values"] = MonitorGraphUI.Monitors.cmdLogDataMin;
+                dataCpu[0]["values"] = Monitors.cpuDataMin;
+                dataTransactions[0]["values"] = Monitors.tpsDataMin;
+                dataRam[0]["values"] = Monitors.memDataMin;
+                dataLatency[0]["values"] = Monitors.latDataMin;
+                dataPartitionIdleTime = Monitors.partitionDataMin;
+                dataCommandLog[0]["values"] = Monitors.cmdLogDataMin;
             } else {
-                dataCpu[0]["values"] = MonitorGraphUI.Monitors.cpuData;
-                dataTransactions[0]["values"] = MonitorGraphUI.Monitors.tpsData;
-                dataRam[0]["values"] = MonitorGraphUI.Monitors.memData;
-                dataLatency[0]["values"] = MonitorGraphUI.Monitors.latData;
-                dataPartitionIdleTime = MonitorGraphUI.Monitors.partitionData;
-                dataDrReplicationRate[0]["values"] = MonitorGraphUI.Monitors.drReplicationData;
-                dataCommandLog[0]["values"] = MonitorGraphUI.Monitors.cmdLogData;
+                dataCpu[0]["values"] = Monitors.cpuData;
+                dataTransactions[0]["values"] = Monitors.tpsData;
+                dataRam[0]["values"] = Monitors.memData;
+                dataLatency[0]["values"] = Monitors.latData;
+                dataPartitionIdleTime = Monitors.partitionData;
+                dataCommandLog[0]["values"] = Monitors.cmdLogData;
             }
 
-            nv.utils.windowResize(MonitorGraphUI.ChartCpu.update);
+            nv.utils.windowResize(ChartCpu.update);
             changeAxisTimeFormat(view);
         };
 
-        this.UpdateCharts = function () {
+        this.RefreshDrGraph = function (view) {
+            currentViewDr = view;
+            var chartList = VoltDbUI.drChartList;
+            if(chartList != undefined && chartList.length > 0){
+                for(var i = 0; i < chartList.length; i++){
+                    if (view == 'Days') {
+                        dataDrReplication['dataDrReplication_' + chartList[i]][0]["values"] = Monitors['drReplicationDataDay_' + chartList[i]]
+                    } else if (view == 'Minutes') {
+                        dataDrReplication['dataDrReplication_' + chartList[i]][0]["values"] = Monitors['drReplicationDataMin_' + chartList[i]]
+                    } else {
+                        dataDrReplication['dataDrReplication_' + chartList[i]][0]["values"] = Monitors['drReplicationData_' + chartList[i]]
+                    }
+                }
+            }
 
+            changeDrAxisTimeFormat(view);
+        };
+
+        this.RefreshImporterGraph = function (view) {
+            currentViewImporter = view;
+            if (view == 'Days') {
+                dataOutTrans = Monitors.outTransDataDay;
+                dataSuccessRate = Monitors.successRateDataDay;
+                dataFailureRate = Monitors.failureRateDataDay;
+            } else if (view == 'Minutes') {
+                dataOutTrans = Monitors.outTransDataMin;
+                dataSuccessRate = Monitors.successRateDataMin;
+                dataFailureRate = Monitors.failureRateDataMin;
+            } else {
+                dataOutTrans = Monitors.outTransData;
+                dataSuccessRate = Monitors.successRateData;
+                dataFailureRate = Monitors.failureRateData;
+            }
+            changeImporterAxisTimeFormat(view);
+
+            d3.select('#visualisationSuccessRate')
+                        .datum(dataSuccessRate)
+                        .transition().duration(500)
+                        .call(ChartSuccessRate);
+            d3.select('#visualisationFailureRate')
+                        .datum(dataFailureRate)
+                        .transition().duration(500)
+                        .call(ChartFailureRate);
+            d3.select('#visualisationOutTrans')
+                        .datum(dataOutTrans)
+                        .transition().duration(500)
+                        .call(ChartOutTrans);
+        };
+
+        this.AddImporterGraphLine = function(dataType, keyValue, timeUnit, colorIndex){
+            var arr = [];
+            if(timeUnit == "second"){
+                arr.push(emptyData[0]);
+                arr.push(emptyData[emptyData.length - 1]);
+            } else if(timeUnit == "minute"){
+                arr.push(emptyDataForMinutes[0]);
+                arr.push(emptyDataForMinutes[emptyDataForMinutes.length - 1]);
+            } else if(timeUnit == "day"){
+                arr.push(emptyDataForDays[0]);
+                arr.push(emptyDataForDays[emptyDataForDays.length - 1]);
+            }
+            Monitors[dataType].push({ key: keyValue, values: arr, color: colorList[colorIndex] })
+            if(dataType == "successRateData"){
+                dataMapperImporterSec[keyValue] = MonitorGraphUI.getDataMapperIndex(dataMapperImporterSec);
+                dataMapperImporterMin[keyValue] = MonitorGraphUI.getDataMapperIndex(dataMapperImporterMin);
+                dataMapperImporterDay[keyValue] = MonitorGraphUI.getDataMapperIndex(dataMapperImporterDay);
+            }
+
+        }
+
+        this.getDataMapperIndex = function(dataMap){
+            var count = 0;
+            $.each(dataMap, function(key, value){
+                if(dataMap[key] > count)
+                    count =  dataMap[key];
+            })
+            count++;
+            return count;
+        }
+
+        this.UpdateCharts = function () {
             if (ramChart.is(":visible"))
-                MonitorGraphUI.ChartRam.update();
+                ChartRam.update();
 
             if (cpuChart.is(":visible"))
-                MonitorGraphUI.ChartCpu.update();
+                ChartCpu.update();
 
             if (latencyChart.is(":visible"))
-                MonitorGraphUI.ChartLatency.update();
+                ChartLatency.update();
 
             if (transactionChart.is(":visible"))
-                MonitorGraphUI.ChartTransactions.update();
+                ChartTransactions.update();
 
             if (partitionChart.is(":visible"))
-                MonitorGraphUI.ChartPartitionIdleTime.update();
-
-            if (drReplicationChart.is(":visible"))                MonitorGraphUI.ChartDrReplicationRate.update();
+                ChartPartitionIdleTime.update();
 
             if (cmdLogChart.is(":visible"))
-                MonitorGraphUI.ChartCommandlog.update();
+                ChartCommandlog.update();
         };
+
+        this.UpdateImporterCharts = function () {
+            if (outTransChart.is(":visible"))
+                ChartOutTrans.update();
+
+            if (successRateChart.is(":visible"))
+                ChartSuccessRate.update();
+
+            if (failureRateChart.is(":visible"))
+                ChartFailureRate.update();
+        };
+
+        this.UpdateDrCharts = function () {
+            var chartList = VoltDbUI.drChartList;
+            if(chartList != undefined && chartList.length > 0 && !$.isEmptyObject(drReplicationCharts)){
+                for(var i = 0; i < chartList.length; i++){
+                    if(drReplicationCharts["ChartDrReplicationRate_" + chartList[i]].is(":visible")) {
+                        drChartList['ChartDrReplicationRate_' + chartList[i]].update();
+                    }
+                }
+            }
+        };
+
+
+        this.InitializeDRGraph = function (){
+            var drChartIds = VoltDbUI.drChartList;
+            if(drChartIds.length > 0) {
+                for(var i = 0; i < drChartIds.length; i++){
+                    initializeGraph(drChartIds[i])
+                }
+            }
+        }
+
+        var initializeGraph = function (i){
+            drChartList['ChartDrReplicationRate_' +i] = nv.models.lineChart();
+
+            nv.addGraph({
+                generate:function() {
+                    drChartList['ChartDrReplicationRate_' + i].xAxis
+                        .tickFormat(function (d) {
+                           return d3.time.format('%X')(new Date(d));
+                        });
+
+                    drChartList['ChartDrReplicationRate_' + i].xAxis.rotateLabels(-20);
+
+                    drChartList['ChartDrReplicationRate_' + i].yAxis
+                        .tickFormat(d3.format(',.2f'));
+
+                    drChartList['ChartDrReplicationRate_' + i].yAxis
+                        .axisLabel('(KBps)')
+                        .axisLabelDistance(10);
+
+                    drChartList['ChartDrReplicationRate_' + i].margin({ left: 100 });
+                    drChartList['ChartDrReplicationRate_' + i].lines.forceY([0, 1]);
+                    d3.select('#visualizationDrReplicationRate_' + i)
+                        .datum(dataDrReplication['dataDrReplication_' + i])
+                        .transition().duration(500)
+                        .call(drChartList['ChartDrReplicationRate_' + i]);
+
+                    nv.utils.windowResize(drChartList['ChartDrReplicationRate_' + i].update);
+                },
+                callback: function() {
+                    drChartList['ChartDrReplicationRate_' + i].useInteractiveGuideline(true);
+                    return drChartList['ChartDrReplicationRate_' + i];
+                }
+            });
+        }
 
         var changeAxisTimeFormat = function (view) {
             var dateFormat = '%X';
             if (view == 'Days')
                 dateFormat = '%d %b %X';
 
-            MonitorGraphUI.ChartCpu.xAxis
+            ChartCpu.xAxis
                 .tickFormat(function (d) {
                     return d3.time.format(dateFormat)(new Date(d));
                 });
-            MonitorGraphUI.ChartRam.xAxis
+            ChartRam.xAxis
                 .tickFormat(function (d) {
                     return d3.time.format(dateFormat)(new Date(d));
                 });
-            MonitorGraphUI.ChartLatency.xAxis
+            ChartLatency.xAxis
                 .tickFormat(function (d) {
                     return d3.time.format(dateFormat)(new Date(d));
                 });
-            MonitorGraphUI.ChartTransactions.xAxis
+            ChartTransactions.xAxis
                 .tickFormat(function (d) {
                     return d3.time.format(dateFormat)(new Date(d));
                 });
-            MonitorGraphUI.ChartPartitionIdleTime.xAxis
+            ChartPartitionIdleTime.xAxis
                 .tickFormat(function (d) {
                     return d3.time.format(dateFormat)(new Date(d));
                 });
-            MonitorGraphUI.ChartDrReplicationRate.xAxis
-                .tickFormat(function (d) {
-                    return d3.time.format(dateFormat)(new Date(d));
-                });
-            MonitorGraphUI.ChartCommandlog.xAxis
+            ChartCommandlog.xAxis
                 .tickFormat(function(d) {
                     return d3.time.format(dateFormat)(new Date(d));
                 });
+
+        };
+
+        var changeDrAxisTimeFormat = function (view) {
+            var dateFormat = '%X';
+            if (view == 'Days')
+                dateFormat = '%d %b %X';
+
+            var chartIds = VoltDbUI.drChartList;
+            if(chartIds.length > 0) {
+                for(var i = 0; i < chartIds.length; i++){
+                    drChartList['ChartDrReplicationRate_' + chartIds[i]].xAxis
+                        .tickFormat(function (d) {
+                            return d3.time.format(dateFormat)(new Date(d));
+                        });
+                }
+            }
+        };
+
+        var changeImporterAxisTimeFormat = function (view) {
+            var dateFormat = '%X';
+            if (view == 'Days')
+                dateFormat = '%d %b %X';
+
+            ChartOutTrans.xAxis
+                .tickFormat(function (d) {
+                    return d3.time.format(dateFormat)(new Date(d));
+                });
+            ChartSuccessRate.xAxis
+                .tickFormat(function (d) {
+                    return d3.time.format(dateFormat)(new Date(d));
+                });
+            ChartFailureRate.xAxis
+                .tickFormat(function (d) {
+                    return d3.time.format(dateFormat)(new Date(d));
+                });
+
         };
 
         var dataView = {
@@ -906,15 +1084,13 @@
         };
 
         function sliceFirstData(dataArray, view) {
-
             var total = totalEmptyData;
             var refEmptyData = emptyData;
 
             if (view == dataView.Minutes) {
                 total = totalEmptyDataForMinutes;
                 refEmptyData = emptyDataForMinutes;
-            }
-            else if (view == dataView.Days) {
+            } else if (view == dataView.Days) {
                 total = totalEmptyDataForDays;
                 refEmptyData = emptyDataForDays;
             }
@@ -927,8 +1103,14 @@
             return dataArray;
         }
 
-        this.RefreshLatency = function (latency, graphView, currentTab) {
-            var monitor = MonitorGraphUI.Monitors;
+        var currentTime = new Date();
+
+        this.setStartTime = function(){
+            currentTime = new Date()
+        }
+
+        this.RefreshLatency = function (latency, graphView, currentTab, currentServer) {
+            var monitor = Monitors;
             var dataLat = monitor.latData;
             var dataLatMin = monitor.latDataMin;
             var dataLatDay = monitor.latDataDay;
@@ -938,64 +1120,76 @@
             var latencyArrMin = []
             var latencyArrDay = []
 
-            if(localStorage.latencyMin != undefined)
-                latencyArrMin = JSON.parse(localStorage.latencyMin)
+            if ($.isEmptyObject(latency) || latency == undefined || !latency.hasOwnProperty(currentServer)
+            || latency[currentServer].P99 == undefined || latency[currentServer].TIMESTAMP == undefined)
+                return;
 
-            if(localStorage.latency != undefined)
-                latencyArr = JSON.parse(localStorage.latency)
+            if(localStorage.latencyMin != undefined){
+                latencyArrMin = getFormattedDataFromLocalStorage(JSON.parse(localStorage.latencyMin))
+            } else {
+                latencyArrMin = JSON.stringify(convertDataFormat(dataLatMin, 'timestamp', 'latency'))
+                latencyArrMin = JSON.parse(latencyArrMin)
+            }
 
-            if(localStorage.latencyDay != undefined)
-                latencyArrDay = JSON.parse(localStorage.latencyDay)
+            if(localStorage.latency != undefined){
+                latencyArr = getFormattedDataFromLocalStorage(JSON.parse(localStorage.latency))
+            } else {
+                latencyArr = JSON.stringify(convertDataFormat(dataLat, 'timestamp', 'latency'))
+                latencyArr = JSON.parse(latencyArr)
+            }
+
+            if(localStorage.latencyDay != undefined){
+                latencyArrDay = getFormattedDataFromLocalStorage(JSON.parse(localStorage.latencyDay))
+            } else {
+                latencyArrDay = JSON.stringify(convertDataFormat(dataLatDay, 'timestamp', 'latency'))
+                latencyArrDay = JSON.parse(latencyArrDay)
+            }
 
             if(monitor.latFirstData){
-                for(var i = 0; i< latencyArr.length; i++){
-                    sliceFirstData(monitor.latData, dataView.Seconds);
-                    monitor.latData.push({"x": new Date(latencyArr[i].timestamp),
-                        "y": latencyArr[i].latency
-                    })
+                if(latencyArr.length > 0 && !(currentTime.getTime() - (new Date(latencyArr[latencyArr.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                    dataLat = []
+                    for(var i = 0; i< latencyArr.length; i++){
+                        dataLat = sliceFirstData(dataLat, dataView.Seconds);
+                        dataLat.push({"x": new Date(latencyArr[i].timestamp),
+                            "y": latencyArr[i].latency
+                        })
+                    }
                 }
-                 for(var j = 0; j< latencyArrMin.length; j++){
-                    sliceFirstData(monitor.latDataMin, dataView.Minutes);
-                    monitor.latDataMin.push({"x": new Date(latencyArrMin[j].timestamp),
-                        "y": latencyArrMin[j].latency
-                    })
+                if(latencyArrMin.length > 0 && !(currentTime.getTime() - (new Date(latencyArrMin[latencyArrMin.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                    dataLatMin = []
+                    for(var j = 0; j< latencyArrMin.length; j++){
+                        dataLatMin = sliceFirstData(dataLatMin, dataView.Minutes);
+                        dataLatMin.push({"x": new Date(latencyArrMin[j].timestamp),
+                            "y": latencyArrMin[j].latency
+                        })
+                    }
+                }
+
+                if(latencyArrDay.length > 0 && !(currentTime.getTime() - (new Date(latencyArrMin[latencyArrMin.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                    dataLatDay = []
+                    for(var k = 0; k < latencyArrDay.length; k++){
+                        dataLatDay = sliceFirstData(dataLatDay, dataView.Days);
+                        dataLatDay.push({"x": new Date(latencyArrDay[k].timestamp),
+                            "y": latencyArrDay[k].latency
+                        })
+                    }
                 }
             }
 
-            // Compute latency statistics
-            jQuery.each(latency, function (id, val) {
+            var timeStamp = new Date(latency[currentServer].TIMESTAMP);
+            var lat = parseFloat(latency[currentServer].P99).toFixed(1) * 1;
 
-                var strLatStats = val["UNCOMPRESSED_HISTOGRAM"];
-                timeStamp = val["TIMESTAMP"];
-                var latStats = convert2Histogram(strLatStats);
-                var singlelat = 0;
-                if (!monitor.latHistogram.hasOwnProperty(id))
-                    singlelat = latStats.getValueAtPercentile(99);
-                else
-                    singlelat = monitor.latHistogram[id].diff(latStats).getValueAtPercentile(99);
-                singlelat = parseFloat(singlelat).toFixed(1) * 1;
-
-                if (singlelat > maxLatency) {
-                    maxLatency = singlelat;
-                }
-
-                monitor.latHistogram[id] = latStats;
-            });
-
-            var lat = maxLatency;
-            if (lat < 0)
-                lat = 0;
             if (monitor.latMaxTimeStamp <= timeStamp) {
                 if (latSecCount >= 6 || monitor.latFirstData) {
                     dataLatMin = sliceFirstData(dataLatMin, dataView.Minutes);
                     if (monitor.latMaxTimeStamp == timeStamp) {
                         dataLatMin.push({ 'x': new Date(timeStamp), 'y': dataLatMin[dataLatMin.length - 1].y });
-                        latencyArrMin = MonitorGraphUI.saveLocalStorage(latencyArrMin, {"timestamp": new Date(timeStamp), "latency": dataLatMin[dataLatMin.length - 1].y }, MonitorGraphUI.timeUnit.min  )
+                        latencyArrMin = saveLocalStorageInterval(latencyArrMin, {"timestamp": new Date(timeStamp), "latency": dataLatMin[dataLatMin.length - 1].y })
                     } else {
                         dataLatMin.push({ 'x': new Date(timeStamp), 'y': lat });
-                        latencyArrMin = MonitorGraphUI.saveLocalStorage(latencyArrMin, {"timestamp": new Date(timeStamp), "latency": lat }, MonitorGraphUI.timeUnit.min  )
+                        latencyArrMin = saveLocalStorageInterval(latencyArrMin, {"timestamp": new Date(timeStamp), "latency": lat })
                     }
-                    MonitorGraphUI.Monitors.latDataMin = dataLatMin;
+                    Monitors.latDataMin = dataLatMin;
                     latSecCount = 0;
                 }
 
@@ -1003,24 +1197,24 @@
                     dataLatDay = sliceFirstData(dataLatDay, dataView.Days);
                     if (monitor.latMaxTimeStamp == timeStamp) {
                         dataLatDay.push({ 'x': new Date(timeStamp), 'y': dataLatDay[dataLatDay.length - 1].y });
-                        latencyArrDay = MonitorGraphUI.saveLocalStorage(latencyArrDay, {"timestamp": new Date(timeStamp), "latency": dataLatMin[dataLatMin.length - 1].y }, MonitorGraphUI.timeUnit.day  )
+                        latencyArrDay = saveLocalStorageInterval(latencyArrDay, {"timestamp": new Date(timeStamp), "latency": dataLatMin[dataLatMin.length - 1].y })
                     } else {
                         dataLatDay.push({ 'x': new Date(timeStamp), 'y': lat });
-                        latencyArrDay = MonitorGraphUI.saveLocalStorage(latencyArrDay, {"timestamp": new Date(timeStamp), "latency": lat }, MonitorGraphUI.timeUnit.day  )
+                        latencyArrDay = saveLocalStorageInterval(latencyArrDay, {"timestamp": new Date(timeStamp), "latency": lat })
                     }
-                    MonitorGraphUI.Monitors.latDataDay = dataLatDay;
+                    Monitors.latDataDay = dataLatDay;
                     latMinCount = 0;
                 }
 
                 dataLat = sliceFirstData(dataLat, dataView.Seconds);
                 if (monitor.latMaxTimeStamp == timeStamp) {
                     dataLat.push({ 'x': new Date(timeStamp), 'y': dataLat[dataLat.length - 1].y });
-                    latencyArr = MonitorGraphUI.saveLocalStorage(latencyArr, {"timestamp": new Date(timeStamp), "latency": dataLat[dataLat.length - 1].y }, MonitorGraphUI.timeUnit.sec  )
+                    latencyArr = saveLocalStorageInterval(latencyArr, {"timestamp": new Date(timeStamp), "latency": dataLat[dataLat.length - 1].y })
                 } else {
                     dataLat.push({ 'x': new Date(timeStamp), 'y': lat });
-                    latencyArr = MonitorGraphUI.saveLocalStorage(latencyArr, {"timestamp": new Date(timeStamp), "latency": lat }, MonitorGraphUI.timeUnit.sec  )
+                    latencyArr = saveLocalStorageInterval(latencyArr, {"timestamp": new Date(timeStamp), "latency": lat })
                 }
-                MonitorGraphUI.Monitors.latData = dataLat;
+                Monitors.latData = dataLat;
 
                 localStorage.latency = JSON.stringify(latencyArr)
                 localStorage.latencyMin = JSON.stringify(latencyArrMin)
@@ -1037,7 +1231,7 @@
                     d3.select("#visualisationLatency")
                         .datum(dataLatency)
                         .transition().duration(500)
-                        .call(MonitorGraphUI.ChartLatency);
+                        .call(ChartLatency);
                 }
                 monitor.latFirstData = false;
             }
@@ -1045,10 +1239,11 @@
                 monitor.latMaxTimeStamp = timeStamp;
             latSecCount++;
             latMinCount++;
+            latency = null
         };
 
         this.RefreshMemory = function (memoryDetails, currentServer, graphView, currentTab) {
-            var monitor = MonitorGraphUI.Monitors;
+            var monitor = Monitors;
             var dataMem = monitor.memData;
             var dataMemMin = monitor.memDataMin;
             var dataMemDay = monitor.memDataDay;
@@ -1059,59 +1254,62 @@
             var memoryDetailsArrMin = []
             var memoryDetailsArrDay = []
 
-            if(localStorage.memoryDetailsMin != undefined)
-                memoryDetailsArrMin = JSON.parse(localStorage.memoryDetailsMin)
-            else {
-                memoryDetailsArrMin =  JSON.stringify(MonitorGraphUI.convertDataFormatForMemory(dataMemMin))
+            if ($.isEmptyObject(memDetails) || memDetails == undefined || memDetails[currentServer].PHYSICALMEMORY == undefined || memDetails[currentServer].RSS == undefined || memDetails[currentServer].TIMESTAMP == undefined)
+                return;
+
+            if(localStorage.memoryDetailsMin != undefined){
+                memoryDetailsArrMin = getFormattedDataFromLocalStorage(JSON.parse(localStorage.memoryDetailsMin))
+            } else {
+                memoryDetailsArrMin = JSON.stringify(convertDataFormat(dataMemMin, 'timestamp', 'physicalMemory'))
                 memoryDetailsArrMin = JSON.parse(memoryDetailsArrMin)
             }
 
 
-            if(localStorage.memoryDetails != undefined)
-                memoryDetailsArr = JSON.parse(localStorage.memoryDetails)
-            else {
-                memoryDetailsArr = JSON.stringify(MonitorGraphUI.convertDataFormatForMemory(dataMem))
+            if(localStorage.memoryDetails != undefined){
+                memoryDetailsArr = getFormattedDataFromLocalStorage(JSON.parse(localStorage.memoryDetails))
+            } else {
+                memoryDetailsArr = JSON.stringify(convertDataFormat(dataMem, 'timestamp', 'physicalMemory'))
                 memoryDetailsArr = JSON.parse(memoryDetailsArr)
             }
 
-            if(localStorage.memoryDetailsDay != undefined)
-                memoryDetailsArrDay = JSON.parse(localStorage.memoryDetailsDay)
-            else {
-                memoryDetailsArrDay = JSON.stringify(MonitorGraphUI.convertDataFormatForMemory(dataMemDay))
+            if(localStorage.memoryDetailsDay != undefined){
+                memoryDetailsArrDay = getFormattedDataFromLocalStorage(JSON.parse(localStorage.memoryDetailsDay))
+            } else {
+                memoryDetailsArrDay = JSON.stringify(convertDataFormat(dataMemDay, 'timestamp', 'physicalMemory'))
                 memoryDetailsArrDay = JSON.parse(memoryDetailsArrDay)
             }
 
             if(monitor.memFirstData){
-                if(memoryDetailsArr.length != 0)
+                if(memoryDetailsArr.length > 0 && !(currentTime.getTime() - (new Date(memoryDetailsArr[memoryDetailsArr.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
                     dataMem = []
-                for(var i = 0; i< memoryDetailsArr.length; i++){
-                    sliceFirstData(monitor.memData, dataView.Seconds);
-                    dataMem.push({"x": new Date(memoryDetailsArr[i].timestamp),
-                        "y": memoryDetailsArr[i].physicalMemory
-                    })
+                    for(var i = 0; i< memoryDetailsArr.length; i++){
+                        dataMem = sliceFirstData(dataMem, dataView.Seconds);
+                        dataMem.push({"x": new Date(memoryDetailsArr[i].timestamp),
+                            "y": memoryDetailsArr[i].physicalMemory
+                        })
+                    }
                 }
-
-                if(memoryDetailsArrMin.length != 0)
+                if(memoryDetailsArrMin.length > 0 && !(currentTime.getTime() - (new Date(memoryDetailsArrMin[memoryDetailsArrMin.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
                     dataMemMin = []
-                for(var j = 0; j< memoryDetailsArrMin.length; j++){
-                    sliceFirstData(monitor.memDataMin, dataView.Minutes);
-                    dataMemMin.push({"x": new Date(memoryDetailsArrMin[j].timestamp),
-                        "y": memoryDetailsArrMin[j].physicalMemory
-                    })
+                    for(var j = 0; j< memoryDetailsArrMin.length; j++){
+                        dataMemMin = sliceFirstData(dataMemMin, dataView.Minutes);
+                        dataMemMin.push({"x": new Date(memoryDetailsArrMin[j].timestamp),
+                            "y": memoryDetailsArrMin[j].physicalMemory
+                        })
+                    }
                 }
 
-                if(memoryDetailsArrDay.length != 0)
+                if(memoryDetailsArrDay.length > 0 && !(currentTime.getTime() - (new Date(memoryDetailsArrDay[memoryDetailsArrDay.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
                     dataMemDay = []
-                for(var k = 0; k< memoryDetailsArrDay.length; k++){
-                    sliceFirstData(monitor.memDataDay, dataView.Days);
-                    dataMemDay.push({"x": new Date(memoryDetailsArrDay[k].timestamp),
-                        "y": memoryDetailsArrDay[k].physicalMemory
-                    })
+                    for(var k = 0; k< memoryDetailsArrDay.length; k++){
+                        dataMemDay = sliceFirstData(dataMemDay, dataView.Days);
+                        dataMemDay.push({"x": new Date(memoryDetailsArrDay[k].timestamp),
+                            "y": memoryDetailsArrDay[k].physicalMemory
+                        })
+                    }
                 }
             }
 
-            if ($.isEmptyObject(memDetails) || memDetails == undefined || memDetails[currentServer].PHYSICALMEMORY == undefined || memDetails[currentServer].RSS == undefined || memDetails[currentServer].TIMESTAMP == undefined)
-                return;
             var memTimeStamp = new Date(memDetails[currentServer].TIMESTAMP);
 
             if (memTimeStamp >= monitor.memMaxTimeStamp) {
@@ -1120,8 +1318,8 @@
                 if (memDetails[currentServer].PHYSICALMEMORY != -1 && physicalMemory != memDetails[currentServer].PHYSICALMEMORY) {
                     physicalMemory = parseFloat(memDetails[currentServer].PHYSICALMEMORY * 1.0 / 1048576.0).toFixed(3) * 1;
 
-                    MonitorGraphUI.ChartRam.yAxis.scale().domain([0, physicalMemory]);
-                    MonitorGraphUI.ChartRam.lines.forceY([0, physicalMemory]);
+                    ChartRam.yAxis.scale().domain([0, physicalMemory]);
+                    ChartRam.lines.forceY([0, physicalMemory]);
                 }
 
                 if (memRss < 0)
@@ -1133,12 +1331,12 @@
                     dataMemMin = sliceFirstData(dataMemMin, dataView.Minutes);
                     if (memTimeStamp == monitor.memMaxTimeStamp) {
                         dataMemMin.push({ "x": new Date(memTimeStamp), "y": dataMemMin[dataMemMin.length - 1].y });
-                        memoryDetailsArrMin = MonitorGraphUI.saveLocalStorage(memoryDetailsArrMin, {"timestamp": new Date(memTimeStamp), "physicalMemory": dataMemMin[dataMemMin.length - 1].y }, MonitorGraphUI.timeUnit.min  )
+                        memoryDetailsArrMin = saveLocalStorageInterval(memoryDetailsArrMin, {"timestamp": new Date(memTimeStamp), "physicalMemory": dataMemMin[dataMemMin.length - 1].y })
                     } else {
                         dataMemMin.push({ 'x': new Date(memTimeStamp), 'y': memRss });
-                        memoryDetailsArrMin = MonitorGraphUI.saveLocalStorage(memoryDetailsArrMin, {"timestamp": new Date(memTimeStamp), "physicalMemory": memRss }, MonitorGraphUI.timeUnit.min  )
+                        memoryDetailsArrMin = saveLocalStorageInterval(memoryDetailsArrMin, {"timestamp": new Date(memTimeStamp), "physicalMemory": memRss })
                     }
-                    MonitorGraphUI.Monitors.memDataMin = dataMemMin;
+                    Monitors.memDataMin = dataMemMin;
                     memSecCount = 0;
                 }
 
@@ -1146,24 +1344,24 @@
                     dataMemDay = sliceFirstData(dataMemDay, dataView.Days);
                     if (memTimeStamp == monitor.memMaxTimeStamp) {
                         dataMemDay.push({ "x": new Date(memTimeStamp), "y": dataMemDay[dataMemDay.length - 1].y });
-                        memoryDetailsArrDay = MonitorGraphUI.saveLocalStorage(memoryDetailsArrDay, {"timestamp": new Date(memTimeStamp), "physicalMemory": dataMemDay[dataMemDay.length - 1].y}, MonitorGraphUI.timeUnit.day )
+                        memoryDetailsArrDay = saveLocalStorageInterval(memoryDetailsArrDay, {"timestamp": new Date(memTimeStamp), "physicalMemory": dataMemDay[dataMemDay.length - 1].y})
                     } else {
                         dataMemDay.push({ 'x': new Date(memTimeStamp), 'y': memRss });
-                        memoryDetailsArrDay = MonitorGraphUI.saveLocalStorage(memoryDetailsArrDay, {"timestamp": new Date(memTimeStamp), "physicalMemory": memRss}, MonitorGraphUI.timeUnit.day )
+                        memoryDetailsArrDay = saveLocalStorageInterval(memoryDetailsArrDay, {"timestamp": new Date(memTimeStamp), "physicalMemory": memRss})
                     }
-                    MonitorGraphUI.Monitors.memDataDay = dataMemDay;
+                    Monitors.memDataDay = dataMemDay;
                     memMinCount = 0;
                 }
 
                 dataMem = sliceFirstData(dataMem, dataView.Seconds);
                 if (memTimeStamp == monitor.memMaxTimeStamp) {
                     dataMem.push({ "x": new Date(memTimeStamp), "y": dataMem[dataMem.length - 1].y });
-                    memoryDetailsArr = MonitorGraphUI.saveLocalStorage(memoryDetailsArr, {"timestamp": new Date(memTimeStamp), "physicalMemory": dataMem[dataMem.length - 1].y}, MonitorGraphUI.timeUnit.sec  )
+                    memoryDetailsArr = saveLocalStorageInterval(memoryDetailsArr, {"timestamp": new Date(memTimeStamp), "physicalMemory": dataMem[dataMem.length - 1].y})
                 } else {
                     dataMem.push({ 'x': new Date(memTimeStamp), 'y': memRss });
-                    memoryDetailsArr = MonitorGraphUI.saveLocalStorage(memoryDetailsArr, {"timestamp": new Date(memTimeStamp), "physicalMemory": memRss}, MonitorGraphUI.timeUnit.sec  )
+                    memoryDetailsArr = saveLocalStorageInterval(memoryDetailsArr, {"timestamp": new Date(memTimeStamp), "physicalMemory": memRss})
                 }
-                MonitorGraphUI.Monitors.memData = dataMem;
+                Monitors.memData = dataMem;
 
 
                 localStorage.memoryDetails = JSON.stringify(memoryDetailsArr)
@@ -1181,7 +1379,7 @@
                     d3.select('#visualisationRam')
                         .datum(dataRam)
                         .transition().duration(500)
-                        .call(MonitorGraphUI.ChartRam);
+                        .call(ChartRam);
                 }
                 monitor.memFirstData = false;
             }
@@ -1191,171 +1389,137 @@
             memMinCount++;
         };
 
-        this.RefreshTransaction = function (transactionDetails, graphView, currentTab) {
-            var monitor = MonitorGraphUI.Monitors;
+        this.RefreshTransaction = function (transactionDetails, graphView, currentTab, currentServer) {
+            var monitor = Monitors;
             var datatrans = monitor.tpsData;
             var datatransMin = monitor.tpsDataMin;
             var datatransDay = monitor.tpsDataDay;
-            var transacDetail = transactionDetails;
-            var transDetailsArr = [];
-            var transDetailsArrMin = [];
-            var transDetailsArrDay = [];
+            var timeStamp;
+            var transDetailsArr = []
+            var transDetailsArrMin = []
+            var transDetailsArrDay = []
 
-            if(localStorage.transDetailsMin != undefined)
-                transDetailsArrMin = JSON.parse(localStorage.transDetailsMin)
-
-            if(localStorage.transDetails != undefined)
-                transDetailsArr = JSON.parse(localStorage.transDetails)
-
-            if(localStorage.transDetailsDay != undefined)
-                transDetailsArrDay = JSON.parse(localStorage.transDetailsDay)
-
-            if(monitor.tpsFirstData){
-                for(var i = 0; i< transDetailsArr.length; i++){
-                    sliceFirstData(monitor.tpsData, dataView.Seconds);
-                    monitor.tpsData.push({"x": new Date(transDetailsArr[i].timestamp),
-                        "y": transDetailsArr[i].transaction
-                    })
-                }
-                for(var j = 0; j< transDetailsArrMin.length; j++){
-                    sliceFirstData(monitor.tpsDataMin, dataView.Minutes);
-                    monitor.tpsDataMin.push({"x": new Date(transDetailsArrMin[j].timestamp),
-                        "y": transDetailsArrMin[j].transaction
-                    })
-                }
-                for(var k = 0; k< transDetailsArrDay.length; k++){
-                    sliceFirstData(monitor.tpsDataDay, dataView.Day);
-                    monitor.tpsDataDay.push({"x": new Date(transDetailsArrDay[k].timestamp),
-                        "y": transDetailsArrDay[k].transaction
-                    })
-                }
-            }
-
-            if ($.isEmptyObject(transacDetail) || transacDetail == undefined || transacDetail["CurrentTimedTransactionCount"] == undefined || transacDetail["TimeStamp"] == undefined || transacDetail["currentTimerTick"] == undefined)
+            if ($.isEmptyObject(transactionDetails) || transactionDetails == undefined || !transactionDetails.hasOwnProperty(currentServer)
+            || transactionDetails[currentServer].TPS == undefined || transactionDetails[currentServer].TIMESTAMP == undefined)
                 return;
 
-            var currentTimedTransactionCount = transacDetail["CurrentTimedTransactionCount"];
-            var currentTimerTick = transacDetail["currentTimerTick"];
+            if(localStorage.transDetailsMin != undefined){
+                transDetailsArrMin = getFormattedDataFromLocalStorage(JSON.parse(localStorage.transDetailsMin))
+            } else {
+                transDetailsArrMin = JSON.stringify(convertDataFormat(datatransMin, 'timestamp', 'transaction'))
+                transDetailsArrMin = JSON.parse(transDetailsArrMin)
+            }
 
-            if (monitor.lastTimedTransactionCount > 0 && monitor.lastTimerTick > 0 && monitor.lastTimerTick != currentTimerTick) {
-                var delta = currentTimedTransactionCount - monitor.lastTimedTransactionCount;
-                var calculatedValue = parseFloat(delta * 1000.0 / (currentTimerTick - monitor.lastTimerTick)).toFixed(1) * 1;
-                if (calculatedValue < 0 || isNaN(calculatedValue) || (currentTimerTick - monitor.lastTimerTick == 0))
-                    calculatedValue = 0;
+            if(localStorage.transDetails != undefined){
+                transDetailsArr = getFormattedDataFromLocalStorage(JSON.parse(localStorage.transDetails))
+            } else {
+                transDetailsArr = JSON.stringify(convertDataFormat(datatrans, 'timestamp', 'transaction'))
+                transDetailsArr = JSON.parse(transDetailsArr)
+            }
 
+            if(localStorage.transDetailsDay != undefined){
+                transDetailsArrDay = getFormattedDataFromLocalStorage(JSON.parse(localStorage.transDetailsDay))
+            } else {
+                transDetailsArrDay = JSON.stringify(convertDataFormat(datatransDay, 'timestamp', 'transaction'))
+                transDetailsArrDay = JSON.parse(transDetailsArrDay)
+            }
+
+            if(monitor.tpsFirstData){
+                if(transDetailsArr.length > 0 && !(currentTime.getTime() - (new Date(transDetailsArr[transDetailsArr.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                    datatrans = []
+                    for(var i = 0; i< transDetailsArr.length; i++){
+                        datatrans = sliceFirstData(datatrans, dataView.Seconds);
+                        datatrans.push({"x": new Date(transDetailsArr[i].timestamp),
+                            "y": transDetailsArr[i].transaction
+                        })
+                    }
+                }
+                if(transDetailsArrMin.length > 0 && !(currentTime.getTime() - (new Date(transDetailsArrMin[transDetailsArrMin.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                    datatransMin = []
+                    for(var j = 0; j< transDetailsArrMin.length; j++){
+                        datatransMin = sliceFirstData(datatransMin, dataView.Minutes);
+                        datatransMin.push({"x": new Date(transDetailsArrMin[j].timestamp),
+                            "y": transDetailsArrMin[j].transaction
+                        })
+                    }
+                }
+
+                if(transDetailsArrDay.length > 0 && !(currentTime.getTime() - (new Date(transDetailsArrMin[transDetailsArrMin.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                    datatransDay = []
+                    for(var k = 0; k < transDetailsArrDay.length; k++){
+                        datatransDay = sliceFirstData(datatransDay, dataView.Days);
+                        datatransDay.push({"x": new Date(transDetailsArrDay[k].timestamp),
+                            "y": transDetailsArrDay[k].transaction
+                        })
+                    }
+                }
+            }
+
+            var timeStamp = new Date(transactionDetails[currentServer].TIMESTAMP);
+            var tps = parseFloat(transactionDetails[currentServer].TPS).toFixed(1) * 1;
+
+            if (monitor.tpsMaxTimeStamp <= timeStamp) {
                 if (tpsSecCount >= 6 || monitor.tpsFirstData) {
                     datatransMin = sliceFirstData(datatransMin, dataView.Minutes);
-                    if (monitor.tpsFirstData || delta != 0 || (currentTimedTransactionCount == 0 && monitor.lastTimedTransactionCount == 0) || calculatedValue == 0) {
-                        datatransMin.push({ "x": new Date(transacDetail["TimeStamp"]), "y": calculatedValue });
-                        transDetailsArrMin = MonitorGraphUI.saveLocalStorage(transDetailsArrMin, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": calculatedValue }, MonitorGraphUI.timeUnit.min  )
+                    if (monitor.tpsMaxTimeStamp == timeStamp) {
+                        datatransMin.push({ 'x': new Date(timeStamp), 'y': datatransMin[datatransMin.length - 1].y });
+                        transDetailsArrMin = saveLocalStorageInterval(transDetailsArrMin, {"timestamp": new Date(timeStamp), "transaction": datatransMin[datatransMin.length - 1].y })
                     } else {
-                        datatransMin.push({ "x": new Date(transacDetail["TimeStamp"]), "y": datatransMin[datatransMin.length - 1].y });
-                        transDetailsArrMin = MonitorGraphUI.saveLocalStorage(transDetailsArrMin, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": datatransMin[datatransMin.length - 1].y }, MonitorGraphUI.timeUnit.min  )
+                        datatransMin.push({ 'x': new Date(timeStamp), 'y': tps });
+                        transDetailsArrMin = saveLocalStorageInterval(transDetailsArrMin, {"timestamp": new Date(timeStamp), "transaction": tps })
                     }
-                    MonitorGraphUI.Monitors.tpsDataMin = datatransMin;
+                    Monitors.tpsDataMin = datatransMin;
                     tpsSecCount = 0;
                 }
+
                 if (tpsMinCount >= 60 || monitor.tpsFirstData) {
                     datatransDay = sliceFirstData(datatransDay, dataView.Days);
-                    if (monitor.tpsFirstData || delta != 0 || (currentTimedTransactionCount == 0 && monitor.lastTimedTransactionCount == 0)|| calculatedValue == 0) {
-                        datatransDay.push({ "x": new Date(transacDetail["TimeStamp"]), "y": calculatedValue });
-                        transDetailsArrDay = MonitorGraphUI.saveLocalStorage(transDetailsArrDay, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": calculatedValue }, MonitorGraphUI.timeUnit.day  )
+                    if (monitor.tpsMaxTimeStamp == timeStamp) {
+                        datatransDay.push({ 'x': new Date(timeStamp), 'y': datatransDay[datatransDay.length - 1].y });
+                        transDetailsArrDay = saveLocalStorageInterval(transDetailsArrDay, {"timestamp": new Date(timeStamp), "transaction": datatransMin[datatransMin.length - 1].y })
                     } else {
-                        datatransDay.push({ "x": new Date(transacDetail["TimeStamp"]), "y": datatransDay[datatransDay.length - 1].y });
-                        transDetailsArrDay = MonitorGraphUI.saveLocalStorage(transDetailsArrDay, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": datatransDay[datatransDay.length - 1].y }, MonitorGraphUI.timeUnit.day  )
+                        datatransDay.push({ 'x': new Date(timeStamp), 'y': tps });
+                        transDetailsArrDay = saveLocalStorageInterval(transDetailsArrDay, {"timestamp": new Date(timeStamp), "transaction": tps })
                     }
-                    MonitorGraphUI.Monitors.tpsDataDay = datatransDay;
+                    Monitors.tpsDataDay = datatransDay;
                     tpsMinCount = 0;
                 }
+
                 datatrans = sliceFirstData(datatrans, dataView.Seconds);
-                if (monitor.tpsFirstData || delta != 0 || (currentTimedTransactionCount == 0 && monitor.lastTimedTransactionCount == 0)|| calculatedValue == 0) {
-                    datatrans.push({ "x": new Date(transacDetail["TimeStamp"]), "y": calculatedValue });
-                    transDetailsArr = MonitorGraphUI.saveLocalStorage(transDetailsArr, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": calculatedValue }, MonitorGraphUI.timeUnit.sec  )
+                if (monitor.tpsMaxTimeStamp == timeStamp) {
+                    datatrans.push({ 'x': new Date(timeStamp), 'y': datatrans[datatrans.length - 1].y });
+                    transDetailsArr = saveLocalStorageInterval(transDetailsArr, {"timestamp": new Date(timeStamp), "transaction": datatrans[datatrans.length - 1].y })
                 } else {
-                    datatrans.push({ "x": new Date(transacDetail["TimeStamp"]), "y": datatrans[datatrans.length - 1].y });
-                    transDetailsArr = MonitorGraphUI.saveLocalStorage(transDetailsArr, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": datatrans[datatrans.length - 1].y }, MonitorGraphUI.timeUnit.sec  )
+                    datatrans.push({ 'x': new Date(timeStamp), 'y': tps });
+                    transDetailsArr = saveLocalStorageInterval(transDetailsArr, {"timestamp": new Date(timeStamp), "transaction": tps })
                 }
-                MonitorGraphUI.Monitors.tpsData = datatrans;
-                monitor.tpsFirstData = false;
-            }
-            else{
-                var delta = currentTimedTransactionCount - monitor.lastTimedTransactionCount;
+                Monitors.tpsData = datatrans;
 
-                if (tpsSecCount >= 6 || monitor.tpsFirstData) {
-                    datatransMin = sliceFirstData(datatransMin, dataView.Minutes);
-                    if (monitor.tpsFirstData || delta != 0 || (currentTimedTransactionCount == 0 && monitor.lastTimedTransactionCount == 0)) {
-                        transDetailsMin = MonitorGraphUI.saveLocalStorage(transDetailsArrMin, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": 0 }, MonitorGraphUI.timeUnit.Min  )
-                        datatransMin.push({ "x": new Date(transacDetail["TimeStamp"]), "y": 0 });
-                    }
-                    MonitorGraphUI.Monitors.tpsDataDay = datatransDay;
-                    tpsSecCount = 0;
-                }
+                localStorage.transDetails = JSON.stringify(transDetailsArr)
+                localStorage.transDetailsMin = JSON.stringify(transDetailsArrMin)
+                localStorage.transDetailsDay = JSON.stringify(transDetailsArrDay)
 
-                if (tpsMinCount >= 60 || monitor.tpsFirstData) {
-                    datatransDay = sliceFirstData(datatransDay, dataView.Days);
-                    if (monitor.tpsFirstData || delta != 0 || (currentTimedTransactionCount == 0 && monitor.lastTimedTransactionCount == 0)) {
-                        transDetailsDay = MonitorGraphUI.saveLocalStorage(transDetailsArrDay, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": 0 }, MonitorGraphUI.timeUnit.Day  )
-                        datatransDay.push({ "x": new Date(transacDetail["TimeStamp"]), "y": 0 });
-                    }
-                    MonitorGraphUI.Monitors.tpsDataDay = datatransDay;
-                    tpsMinCount = 0;
-                }
+                if (graphView == 'Minutes')
+                    dataTransactions[0]["values"] = datatransMin;
+                else if (graphView == 'Days')
+                    dataTransactions[0]["values"] = datatransDay;
+                else
+                    dataTransactions[0]["values"] = datatrans;
 
-                if (monitor.tpsFirstData){
-                    if(localStorage.transDetails == undefined){
-                        datatrans.push({ "x": new Date(transacDetail["TimeStamp"]), "y": null });
-                        MonitorGraphUI.Monitors.tpsData = datatrans;
-                    }
-                    else{
-                        if (delta != 0 || (currentTimedTransactionCount == 0 && monitor.lastTimedTransactionCount == 0)) {
-                            datatrans.push({ "x": new Date(transacDetail["TimeStamp"]), "y": datatrans[datatrans.length - 1].y });
-                            transDetailsArr = MonitorGraphUI.saveLocalStorage(transDetailsArr, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": datatrans[datatrans.length - 1].y }, MonitorGraphUI.timeUnit.sec  )
-                            MonitorGraphUI.Monitors.tpsData = datatrans;
-                        }
-                    }
-                }
-                else{
-                    if(localStorage.transDetails == undefined){
-                        datatrans.push({ "x": new Date(transacDetail["TimeStamp"]), "y": 0 });
-                        MonitorGraphUI.Monitors.tpsData = datatrans;
-                    }
-                    else{
-                        var calculatedValue = parseFloat(delta * 1000.0 / (currentTimerTick - monitor.lastTimerTick)).toFixed(1) * 1;
-                        if (delta != 0 || (currentTimedTransactionCount == 0 && monitor.lastTimedTransactionCount == 0)) {
-                            datatrans.push({ "x": new Date(transacDetail["TimeStamp"]), "y": calculatedValue });
-                            transDetailsArr = MonitorGraphUI.saveLocalStorage(transDetailsArr, {"timestamp": new Date(transacDetail["TimeStamp"]), "transaction": calculatedValue }, MonitorGraphUI.timeUnit.sec  )
-                            MonitorGraphUI.Monitors.tpsData = datatrans;
-                        }
-                    }
+                if (currentTab == NavigationTabs.DBMonitor && currentView == graphView && transactionChart.is(":visible")) {
+                    d3.select("#visualisationTransaction")
+                        .datum(dataTransactions)
+                        .transition().duration(500)
+                        .call(ChartTransactions);
                 }
                 monitor.tpsFirstData = false;
             }
-
-            localStorage.transDetails = JSON.stringify(transDetailsArr)
-            localStorage.transDetailsMin = JSON.stringify(transDetailsArrMin)
-            localStorage.transDetailsDay = JSON.stringify(transDetailsArrDay)
-
-            if (graphView == 'Minutes')
-                dataTransactions[0]["values"] = datatransMin;
-            else if (graphView == 'Days')
-                dataTransactions[0]["values"] = datatransDay;
-            else
-                dataTransactions[0]["values"] = datatrans;
-
-            monitor.lastTimedTransactionCount = currentTimedTransactionCount;
-            monitor.lastTimerTick = currentTimerTick;
-
-            if (currentTab == NavigationTabs.DBMonitor && currentView == graphView && transactionChart.is(":visible")) {
-                d3.select('#visualisationTransaction')
-                    .datum(dataTransactions)
-                    .transition().duration(500)
-                    .call(MonitorGraphUI.ChartTransactions);
-            }
-
+            if(timeStamp > monitor.tpsMaxTimeStamp)
+                monitor.tpsMaxTimeStamp = timeStamp;
             tpsSecCount++;
             tpsMinCount++;
+            transactionDetails = null
         };
-
 
         this.timeUnit = {
             sec: 5,
@@ -1364,50 +1528,70 @@
         }
 
         this.RefreshCpu = function (cpuDetails, currentServer, graphView, currentTab) {
-            var monitor = MonitorGraphUI.Monitors;
+            var monitor = Monitors;
             var cpuDetailsArr = []
             var cpuDetailsArrMin = []
             var cpuDetailsArrDay = []
-
-            if(localStorage.cpuDetailsMin != undefined)
-                cpuDetailsArrMin = JSON.parse(localStorage.cpuDetailsMin)
-
-            if(localStorage.cpuDetailsDay != undefined)
-                cpuDetailsArrDay = JSON.parse(localStorage.cpuDetailsDay)
 
             var cpuData = monitor.cpuData;
             var cpuDataMin = monitor.cpuDataMin;
             var cpuDataDay = monitor.cpuDataHrs;
             var cpuDetail = cpuDetails;
 
-
             if ($.isEmptyObject(cpuDetail) || cpuDetail == undefined || !cpuDetail.hasOwnProperty(currentServer) || cpuDetail[currentServer].PERCENT_USED == undefined || cpuDetail[currentServer].TIMESTAMP == undefined)
                 return;
 
-            if(localStorage.cpuDetails != undefined)
-                cpuDetailsArr = JSON.parse(localStorage.cpuDetails)
+            if(localStorage.cpuDetailsMin != undefined)
+                cpuDetailsArrMin = getFormattedDataFromLocalStorage(JSON.parse(localStorage.cpuDetailsMin))
+            else {
+                cpuDetailsArrMin = JSON.stringify(convertDataFormat(cpuDataMin, 'timestamp', 'percentUsed'))
+                cpuDetailsArrMin = JSON.parse(cpuDetailsArrMin)
+            }
+
+            if(localStorage.cpuDetailsDay != undefined)
+                cpuDetailsArrDay = getFormattedDataFromLocalStorage(JSON.parse(localStorage.cpuDetailsDay))
+            else {
+                cpuDetailsArrDay = JSON.stringify(convertDataFormat(cpuDataDay, 'timestamp', 'percentUsed'))
+                cpuDetailsArrDay = JSON.parse(cpuDetailsArrDay)
+            }
+
+            if(localStorage.cpuDetails != undefined){
+                cpuDetailsArr = getFormattedDataFromLocalStorage(JSON.parse(localStorage.cpuDetails))
+            } else {
+                cpuDetailsArr =  JSON.stringify(convertDataFormat(cpuData, 'timestamp', 'percentUsed'))
+                cpuDetailsArr =  JSON.parse(cpuDetailsArr)
+            }
 
             if(monitor.cpuFirstData){
-                for(var i = 0; i< cpuDetailsArr.length; i++){
-                    sliceFirstData(monitor.cpuData, dataView.Seconds);
-                    monitor.cpuData.push({"x": new Date(cpuDetailsArr[i].timestamp),
-                        "y": cpuDetailsArr[i].percentUsed
-                    })
-                }
-                for(var j = 0; j< cpuDetailsArrMin.length; j++){
-                    sliceFirstData(monitor.cpuDataMin, dataView.Minutes);
-                    monitor.cpuDataMin.push({"x": new Date(cpuDetailsArrMin[j].timestamp),
-                        "y": cpuDetailsArrMin[j].percentUsed
-                    })
+                if(cpuDetailsArr.length > 0 && !(currentTime.getTime() - (new Date(cpuDetailsArr[cpuDetailsArr.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                    cpuData = []
+                    for(var i = 0; i< cpuDetailsArr.length; i++){
+                        cpuData = sliceFirstData(cpuData, dataView.Seconds);
+                        cpuData.push({"x": new Date(cpuDetailsArr[i].timestamp),
+                            "y": cpuDetailsArr[i].percentUsed
+                        })
+                    }
                 }
 
-                for(var k = 0; k< cpuDetailsArrDay.length; k++){
-                    sliceFirstData(monitor.cpuDataHrs, dataView.Days );
-                    monitor.cpuDataHrs.push({"x": new Date(cpuDetailsArrDay[k].timestamp),
-                        "y": cpuDetailsArrDay[k].percentUsed
-                    })
+                if(cpuDetailsArrMin.length > 0 && !(currentTime.getTime() - (new Date(cpuDetailsArrMin[cpuDetailsArrMin.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                    cpuDataMin = []
+                    for(var j = 0; j< cpuDetailsArrMin.length; j++){
+                        cpuDataMin = sliceFirstData(cpuDataMin, dataView.Minutes);
+                        cpuDataMin.push({"x": new Date(cpuDetailsArrMin[j].timestamp),
+                            "y": cpuDetailsArrMin[j].percentUsed
+                        })
+                    }
                 }
 
+                if(cpuDetailsArrDay.length > 0 && !(currentTime.getTime() - (new Date(cpuDetailsArrDay[cpuDetailsArrDay.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                    cpuDataDay = []
+                    for(var k = 0; k< cpuDetailsArrDay.length; k++){
+                        cpuDataDay = sliceFirstData(cpuDataDay, dataView.Days );
+                        cpuDataDay.push({"x": new Date(cpuDetailsArrDay[k].timestamp),
+                            "y": cpuDetailsArrDay[k].percentUsed
+                        })
+                    }
+                }
             }
 
             var percentageUsage = parseFloat(cpuDetail[currentServer].PERCENT_USED).toFixed(1) * 1;
@@ -1424,44 +1608,43 @@
                     cpuDataMin = sliceFirstData(cpuDataMin, dataView.Minutes);
                     if (timeStamp == monitor.cpuMaxTimeStamp) {
                         cpuDataMin.push({ "x": new Date(timeStamp), "y": cpuDataMin[cpuDataMin.length - 1].y });
-                        cpuDetailsArrMin = MonitorGraphUI.saveLocalStorage(cpuDetailsArrMin, {"timestamp": new Date(timeStamp), "percentUsed": cpuData[cpuData.length - 1].y}, MonitorGraphUI.timeUnit.min  )
+                        cpuDetailsArrMin = saveLocalStorageInterval(cpuDetailsArrMin, {"timestamp": new Date(timeStamp), "percentUsed": cpuDataMin[cpuDataMin.length - 1].y}, MonitorGraphUI.timeUnit.min  )
                     } else {
                         cpuDataMin.push({ "x": new Date(timeStamp), "y": percentageUsage });
-                        cpuDetailsArrMin = MonitorGraphUI.saveLocalStorage(cpuDetailsArrMin, {"timestamp": new Date(timeStamp), "percentUsed": percentageUsage}, MonitorGraphUI.timeUnit.min  )
+                        cpuDetailsArrMin = saveLocalStorageInterval(cpuDetailsArrMin, {"timestamp": new Date(timeStamp), "percentUsed": percentageUsage}, MonitorGraphUI.timeUnit.min  )
                     }
-                    MonitorGraphUI.Monitors.cpuDataMin = cpuDataMin;
+                    Monitors.cpuDataMin = cpuDataMin;
                     cpuSecCount = 0;
                 }
                 if (cpuMinCount >= 60 || monitor.cpuFirstData) {
                     cpuDataDay = sliceFirstData(cpuDataDay, dataView.Days);
                     if (timeStamp == monitor.cpuMaxTimeStamp) {
                         cpuDataDay.push({ "x": new Date(timeStamp), "y": cpuDataDay[cpuDataDay.length - 1].y });
-                        cpuDetailsArrDay = MonitorGraphUI.saveLocalStorage(cpuDetailsArrDay, {"timestamp": new Date(timeStamp), "percentUsed": cpuData[cpuData.length - 1].y}, MonitorGraphUI.timeUnit.day  )
+                        cpuDetailsArrDay = saveLocalStorageInterval(cpuDetailsArrDay, {"timestamp": new Date(timeStamp), "percentUsed": cpuDataDay[cpuDataDay.length - 1].y}, MonitorGraphUI.timeUnit.day  )
                     } else {
                         cpuDataDay.push({ "x": new Date(timeStamp), "y": percentageUsage });
-                        cpuDetailsArrDay = MonitorGraphUI.saveLocalStorage(cpuDetailsArrDay, {"timestamp": new Date(timeStamp), "percentUsed": percentageUsage}, MonitorGraphUI.timeUnit.day )
+                        cpuDetailsArrDay = saveLocalStorageInterval(cpuDetailsArrDay, {"timestamp": new Date(timeStamp), "percentUsed": percentageUsage}, MonitorGraphUI.timeUnit.day )
                     }
-                    MonitorGraphUI.Monitors.cpuDataHrs = cpuDataDay;
+                    Monitors.cpuDataHrs = cpuDataDay;
                     cpuMinCount = 0;
                 }
                 cpuData = sliceFirstData(cpuData, dataView.Seconds);
                 if (timeStamp == monitor.cpuMaxTimeStamp) {
                     cpuData.push({ "x": new Date(timeStamp), "y": cpuData[cpuData.length - 1].y });
-                    cpuDetailsArr = MonitorGraphUI.saveLocalStorage(cpuDetailsArr, {"timestamp": new Date(timeStamp), "percentUsed": cpuData[cpuData.length - 1].y}, MonitorGraphUI.timeUnit.sec  )
+                    cpuDetailsArr = saveLocalStorageInterval(cpuDetailsArr, {"timestamp": new Date(timeStamp), "percentUsed": cpuData[cpuData.length - 1].y}, MonitorGraphUI.timeUnit.sec  )
                 } else {
                     cpuData.push({ "x": new Date(timeStamp), "y": percentageUsage });
-                    cpuDetailsArr = MonitorGraphUI.saveLocalStorage(cpuDetailsArr, {"timestamp": new Date(timeStamp), "percentUsed": percentageUsage}, MonitorGraphUI.timeUnit.sec  )
+                    cpuDetailsArr = saveLocalStorageInterval(cpuDetailsArr, {"timestamp": new Date(timeStamp), "percentUsed": percentageUsage}, MonitorGraphUI.timeUnit.sec  )
                 }
                 try{
                     $(".errorMsgLocalStorageFull").hide();
                     localStorage.cpuDetails = JSON.stringify(cpuDetailsArr)
                     localStorage.cpuDetailsMin = JSON.stringify(cpuDetailsArrMin)
                     localStorage.cpuDetailsDay = JSON.stringify(cpuDetailsArrDay)
-                }
-                catch(e){
+                } catch(e) {
                     $(".errorMsgLocalStorageFull").show();
                 }
-                MonitorGraphUI.Monitors.cpuData = cpuData;
+                Monitors.cpuData = cpuData;
                 monitor.cpuFirstData = false;
 
                 if (graphView == 'Minutes')
@@ -1477,7 +1660,7 @@
                     d3.select('#visualisationCpu')
                         .datum(dataCpu)
                         .transition().duration(500)
-                        .call(MonitorGraphUI.ChartCpu);
+                        .call(ChartCpu);
                 }
             }
             if (timeStamp > monitor.cpuMaxTimeStamp)
@@ -1486,46 +1669,82 @@
             cpuMinCount++;
         };
 
-        this.saveLocalStorage = function(data, newItem, timeUnit){
-            var sliderValue = $( "#slider-range-min" ).slider( "value" )
-            var slicedData = []
-            var interval = (sliderValue * 60) / timeUnit
-            if (sliderValue != 0){
-                if (data.length >= interval){
-                    slicedData = data.slice(1,  (data.length - (data.length - interval)))
-                } else {
-                    slicedData = data
+        var saveLocalStorageInterval = function(rawDataArr, newItem){
+            var interval_end = new Date()
+            var interval_start = new Date()
+            interval_end.setMinutes(interval_end.getMinutes() - RETAINED_TIME_INTERVAL);
+            var dataArr = [];
+            for(var i = 0; i < rawDataArr.length; i++){
+                var timeStamp =  new Date(rawDataArr[i].timestamp);
+                if(timeStamp.getTime() >= interval_end.getTime() && timeStamp.getTime() <= interval_start.getTime()){
+                    dataArr.push(rawDataArr[i])
                 }
-            slicedData.push(newItem)
             }
-            return slicedData;
+            dataArr.push(newItem)
+            return dataArr;
         }
 
-        this.savePartitionDataToLocalStorage = function(data, newItem, timeUnit, keyIndex){
-            var sliderValue = $( "#slider-range-min" ).slider( "value" )
-            var values = data[keyIndex].values
-            var slicedData = []
-            var interval = (sliderValue * 60) / timeUnit
-            if (values.length >= interval){
-                slicedData = values.slice(1,  (values.length - (values.length - interval)))
-            } else {
-                slicedData = values
+        var getFormattedDataFromLocalStorage = function(rawDataArr){
+            var interval_end = new Date()
+            var interval_start = new Date()
+            interval_end.setMinutes(interval_end.getMinutes() - RETAINED_TIME_INTERVAL);
+            var dataArr = [];
+            for(var i = 0; i < rawDataArr.length; i++){
+                var timeStamp =  new Date(rawDataArr[i].timestamp);
+                if(timeStamp.getTime() >= interval_end.getTime() && timeStamp.getTime() <= interval_start.getTime()){
+                    dataArr.push(rawDataArr[i])
+                }
             }
-            slicedData.push(newItem)
-            data[keyIndex].values = slicedData
+            return dataArr;
+        }
+
+        var getFormattedPartitionDataFromLocalStorage = function(rawDataArr){
+            var interval_end = new Date()
+            var interval_start = new Date()
+            interval_end.setMinutes(interval_end.getMinutes() - RETAINED_TIME_INTERVAL);
+            var partitionData = []
+            for(var i = 0; i< rawDataArr.length; i++){
+                var keyIndex =  i;
+                partitionData[keyIndex] = {}
+                partitionData[keyIndex]["values"] = []
+                partitionData[keyIndex]["key"] = rawDataArr[keyIndex]["key"]
+                partitionData[keyIndex]["color"] = rawDataArr[keyIndex]["color"]
+                for(var b = 0; b < rawDataArr[i]["values"].length; b++){
+                    var timeStamp =  new Date(rawDataArr[i]["values"][b].x);
+                    if(timeStamp.getTime() >= interval_end.getTime() && timeStamp.getTime() <= interval_start.getTime()){
+                        partitionData[keyIndex]["values"].push(rawDataArr[i]["values"][b])
+                    }
+                }
+            }
+            return partitionData;
+        }
+
+        var savePartitionDataToLocalStorage = function(data, newItem, keyIndex){
+            var interval_end = new Date()
+            var interval_start = new Date()
+            interval_end.setMinutes(interval_end.getMinutes() - RETAINED_TIME_INTERVAL);
+            var values = data[keyIndex].values
+            var dataArr = [];
+            for(var i = 0; i < values.length; i++){
+                var timeStamp =  new Date(values[i].x);
+                if(timeStamp.getTime() >= interval_end.getTime() && timeStamp.getTime() <= interval_start.getTime()){
+                    dataArr.push(values[i])
+                }
+            }
+            dataArr.push(newItem)
+            data[keyIndex].values = dataArr
             return data;
         }
 
         function getPartitionData() {
-            var monitor = MonitorGraphUI.Monitors;
+            var monitor = Monitors;
             monitor.partitionData = getEmptyDataForPartition();
             monitor.partitionDataMin = getEmptyDataForPartitionForMinutes();
             monitor.partitionDataDay = getEmptyDataForPartitionForDay();
         }
 
         this.RefreshPartitionIdleTime = function (partitionDetails, currentServer, graphView, currentTab) {
-
-            var monitor = MonitorGraphUI.Monitors;
+            var monitor = Monitors;
 
             if (monitor.partitionData.length < 1 || monitor.partitionDataMin.length < 1 || monitor.partitionDataDay.length < 1) {
                 getPartitionData();
@@ -1548,54 +1767,58 @@
             var partitionDetailsArrMin = [];
             var partitionDetailsArrDay = [];
 
+            if(localStorage.partitionDetailsMin != undefined){
+                partitionDetailsArrMin = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.partitionDetailsMin))
+            } else {
+                partitionDetailsArrMin = JSON.stringify(convertDataFormatForPartition(partitionDataMin))
+                partitionDetailsArrMin = JSON.parse(partitionDetailsArrMin)
+            }
 
-            if(localStorage.partitionDetailsMin != undefined)
-                partitionDetailsArrMin = JSON.parse(localStorage.partitionDetailsMin)
-            else
-                partitionDetailsArrMin = JSON.stringify(monitor.partitionDataMin);
-
-            if(localStorage.partitionDetailsDay != undefined)
-                partitionDetailsArrDay = JSON.parse(localStorage.partitionDetailsDay)
-            else
-                partitionDetailsArrDay = JSON.stringify(monitor.partitionDataDay);
-
-            if(localStorage.partitionDetails != undefined)
-                partitionDetailsArr = JSON.parse(localStorage.partitionDetails)
-            else
-                partitionDetailsArr = JSON.stringify(monitor.partitionData);
+            if(localStorage.partitionDetailsDay != undefined){
+                partitionDetailsArrDay = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.partitionDetailsDay))
+            } else {
+                partitionDetailsArrDay = JSON.stringify(convertDataFormatForPartition(partitionDataDay))
+                partitionDetailsArrDay = JSON.parse(partitionDetailsArrDay)
+            }
+            if(localStorage.partitionDetails != undefined){
+                partitionDetailsArr = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.partitionDetails))
+            } else {
+                partitionDetailsArr = JSON.stringify(convertDataFormatForPartition(partitionData))
+                partitionDetailsArr = JSON.parse(partitionDetailsArr)
+            }
 
             if(monitor.partitionFirstData){
-                if(typeof(partitionDetailsArr) != "object" )
-                    partitionDetailsArr = JSON.parse(partitionDetailsArr)
                 for(var i = 0; i< partitionDetailsArr.length; i++){
-                    keyIndexSec =  i;
-                    if(partitionDetailsArr.length != 0)
-                        monitor.partitionData[keyIndexSec]["values"] = []
-                    for(var b = 0; b < partitionDetailsArr[i]["values"].length; b++){
-                        monitor.partitionData[keyIndexSec]["values"].push({"x": new Date(partitionDetailsArr[i]["values"][b].x), "y": partitionDetailsArr[i]["values"][b].y})
+                    var keyIndexSec =  i;
+                    if(partitionDetailsArr[i]["values"].length > 0 && !(currentTime.getTime() - (new Date(partitionDetailsArr[i]["values"][partitionDetailsArr[i]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                        partitionData[keyIndexSec]["values"] = []
+                        for(var b = 0; b < partitionDetailsArr[i]["values"].length; b++){
+                            partitionData[keyIndexSec]["values"] = sliceFirstData(partitionData[keyIndexSec]["values"], dataView.Seconds);
+                            partitionData[keyIndexSec]["values"].push({"x": new Date(partitionDetailsArr[i]["values"][b].x), "y": partitionDetailsArr[i]["values"][b].y})
+                        }
                     }
                 }
 
-                if(typeof(partitionDetailsArrMin) != "object" )
-                    partitionDetailsArrMin = JSON.parse(partitionDetailsArrMin)
                 for(var j = 0; j< partitionDetailsArrMin.length; j++){
-                      keyIndexMin =  j;
-                    if(partitionDetailsArrMin.length != 0)
-                        monitor.partitionDataMin[keyIndexMin]["values"] = []
-                    for(var a = 0; a < partitionDetailsArrMin[j]["values"].length; a++){
-                        monitor.partitionDataMin[keyIndexMin]["values"].push({"x": new Date(partitionDetailsArrMin[j]["values"][a].x), "y": partitionDetailsArrMin[j]["values"][a].y})
+                    var keyIndexMin =  j;
+                    if(partitionDetailsArrMin[j]["values"].length > 0 && !(currentTime.getTime() - (new Date(partitionDetailsArrMin[j]["values"][partitionDetailsArrMin[j]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                        partitionDataMin[keyIndexMin]["values"] = []
+                        for(var a = 0; a < partitionDetailsArrMin[j]["values"].length; a++){
+                            partitionDataMin[keyIndexMin]["values"] = sliceFirstData(partitionDataMin[keyIndexMin]["values"], dataView.Minutes)
+                            partitionDataMin[keyIndexMin]["values"].push({"x": new Date(partitionDetailsArrMin[j]["values"][a].x), "y": partitionDetailsArrMin[j]["values"][a].y})
+                        }
                     }
                 }
-                if(typeof(partitionDetailsArrDay) != "object" )
-                    partitionDetailsArrDay = JSON.parse(partitionDetailsArrDay)
+
                 for(var k = 0; k< partitionDetailsArrDay.length; k++){
-//                        keyIndexDay =  partitionDetailsArrDay[k].key.substr(partitionDetailsArrDay[k].key.length - 6, 1)
-                   keyIndexDay = k;
-                   if(partitionDetailsArrDay.length != 0)
-                        monitor.partitionDataDay[keyIndexMin]["values"] = []
-                   for(var c = 0; c < partitionDetailsArrDay[k]["values"].length; c++){
-                       monitor.partitionDataDay[keyIndexDay]["values"].push({"x": new Date(partitionDetailsArrDay[k]["values"][c].x), "y": partitionDetailsArrDay[k]["values"][c].y})
-                   }
+                    var keyIndexDay = k;
+                    if(partitionDetailsArrDay[k]["values"].length > 0 && !(currentTime.getTime() - (new Date(partitionDetailsArrDay[k]["values"][partitionDetailsArrDay[k]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                        partitionDataDay[keyIndexMin]["values"] = []
+                        for(var c = 0; c < partitionDetailsArrDay[k]["values"].length; c++){
+                            partitionDataDay[keyIndexDay]["values"] = sliceFirstData(partitionDataDay[keyIndexDay]["values"], dataView.Days)
+                            partitionDataDay[keyIndexDay]["values"].push({"x": new Date(partitionDetailsArrDay[k]["values"][c].x), "y": partitionDetailsArrDay[k]["values"][c].y})
+                        }
+                    }
                 }
             }
 
@@ -1619,12 +1842,12 @@
                                 partitionDataMin[keyIndex]["values"] = sliceFirstData(partitionDataMin[keyIndex]["values"], dataView.Minutes);
                                 if (timeStamp == monitor.partitionMaxTimeStamp) {
                                     partitionDataMin[keyIndex]["values"].push({"x": new Date(timeStamp), "y": partitionDataMin[keyIndex]["values"][partitionDataMin[keyIndex]["values"].length - 1].y });
-                                    partitionDetailsArrMin = MonitorGraphUI.savePartitionDataToLocalStorage(partitionDetailsArrMin, {"x": new Date(timeStamp), "y": partitionDataMin[keyIndex]["values"][partitionDataMin[keyIndex]["values"].length - 1].y }, MonitorGraphUI.timeUnit.min, keyIndex)
+                                    partitionDetailsArrMin = savePartitionDataToLocalStorage(partitionDetailsArrMin, {"x": new Date(timeStamp), "y": partitionDataMin[keyIndex]["values"][partitionDataMin[keyIndex]["values"].length - 1].y }, keyIndex)
                                 } else {
                                     partitionDataMin[keyIndex]["values"].push({ 'x': new Date(timeStamp), 'y': percentValue });
-                                    partitionDetailsArrMin = MonitorGraphUI.savePartitionDataToLocalStorage(partitionDetailsArrMin, { 'x': new Date(timeStamp), 'y': percentValue }, MonitorGraphUI.timeUnit.min, keyIndex)
+                                    partitionDetailsArrMin = savePartitionDataToLocalStorage(partitionDetailsArrMin, { 'x': new Date(timeStamp), 'y': percentValue }, keyIndex)
                                 }
-                                MonitorGraphUI.Monitors.partitionDataMin = partitionDataMin;
+                                Monitors.partitionDataMin = partitionDataMin;
                             }
                         }
 
@@ -1633,12 +1856,12 @@
                             partitionDataDay[keyIndexDay]["values"] = sliceFirstData(partitionDataDay[keyIndexDay]["values"], dataView.Days);
                             if (timeStamp == monitor.partitionMaxTimeStamp) {
                                 partitionDataDay[keyIndexDay]["values"].push({ "x": new Date(timeStamp), "y": partitionDataDay[keyIndexDay]["values"][partitionDataDay[keyIndexDay]["values"].length - 1].y });
-                                partitionDetailsArrDay = MonitorGraphUI.savePartitionDataToLocalStorage(partitionDetailsArrDay, { "x": new Date(timeStamp), "y": partitionDataDay[keyIndexDay]["values"][partitionDataDay[keyIndexDay]["values"].length - 1].y }, MonitorGraphUI.timeUnit.day, keyIndexDay)
+                                partitionDetailsArrDay = savePartitionDataToLocalStorage(partitionDetailsArrDay, { "x": new Date(timeStamp), "y": partitionDataDay[keyIndexDay]["values"][partitionDataDay[keyIndexDay]["values"].length - 1].y }, keyIndexDay)
                             } else {
                                 partitionDataDay[keyIndexDay]["values"].push({ 'x': new Date(timeStamp), 'y': percentValue });
-                                partitionDetailsArrDay = MonitorGraphUI.savePartitionDataToLocalStorage(partitionDetailsArrDay, { 'x': new Date(timeStamp), 'y': percentValue }, MonitorGraphUI.timeUnit.day, keyIndexDay)
+                                partitionDetailsArrDay = savePartitionDataToLocalStorage(partitionDetailsArrDay, { 'x': new Date(timeStamp), 'y': percentValue }, keyIndexDay)
                             }
-                            MonitorGraphUI.Monitors.partitionDataDay = partitionDataDay;
+                            Monitors.partitionDataDay = partitionDataDay;
                         }
 
                         var keyIndexSec = dataMapperSec[keyValue];
@@ -1646,13 +1869,12 @@
                         partitionData[keyIndexSec]["values"] = sliceFirstData(partitionData[keyIndexSec]["values"], dataView.Seconds);
                         if (timeStamp == monitor.partitionMaxTimeStamp) {
                             partitionData[keyIndexSec]["values"].push({"x": new Date(timeStamp), "y": partitionData[keyIndexSec]["values"][partitionData[keyIndexSec]["values"].length - 1].y });
-                            partitionDetailsArr = MonitorGraphUI.savePartitionDataToLocalStorage(partitionDetailsArr, {"x": new Date(timeStamp), "y": partitionData[keyIndexSec]["values"][partitionData[keyIndexSec]["values"].length - 1].y }, MonitorGraphUI.timeUnit.sec, keyIndexSec)
+                            partitionDetailsArr = savePartitionDataToLocalStorage(partitionDetailsArr, {"x": new Date(timeStamp), "y": partitionData[keyIndexSec]["values"][partitionData[keyIndexSec]["values"].length - 1].y }, keyIndexSec)
                         } else {
                             partitionData[keyIndexSec].values.push({ 'x': new Date(timeStamp), 'y': percentValue });
-                            partitionDetailsArr = MonitorGraphUI.savePartitionDataToLocalStorage(partitionDetailsArr, { 'x': new Date(timeStamp), 'y': percentValue }, MonitorGraphUI.timeUnit.sec, keyIndexSec  )
-
+                            partitionDetailsArr = savePartitionDataToLocalStorage(partitionDetailsArr, { 'x': new Date(timeStamp), 'y': percentValue }, keyIndexSec  )
                         }
-                        MonitorGraphUI.Monitors.partitionData = partitionData;
+                        Monitors.partitionData = partitionData;
                     });
                 });
 
@@ -1680,7 +1902,7 @@
                     d3.select('#visualisationPartitionIdleTime')
                         .datum(dataPartitionIdleTime)
                         .transition().duration(500)
-                        .call(MonitorGraphUI.ChartPartitionIdleTime);
+                        .call(ChartPartitionIdleTime);
                 }
             }
             if (timeStamp > monitor.partitionMaxTimeStamp)
@@ -1691,119 +1913,147 @@
         };
 
         this.RefreshDrReplicationGraph = function (drDetails, currentServer, graphView, currentTab) {
-            var monitor = MonitorGraphUI.Monitors;
-            var drData = monitor.drReplicationData;
-            var drDataMin = monitor.drReplicationDataMin;
-            var drDataDay = monitor.drReplicationDataDay;
-            var drDetail = drDetails;
-            var drDetailsArr = []
-            var drDetailsArrMin = []
-            var drDetailsArrDay = []
+            var monitor = Monitors;
+            var chartList = VoltDbUI.drChartList;
+            if(chartList != undefined && chartList.length > 0){
+                for(var i = 0; i < chartList.length; i++){
+                    var drData = monitor['drReplicationData_' + chartList[i]];
+                    var drDataMin = monitor['drReplicationDataMin_' + chartList[i]];
+                    var drDataDay = monitor['drReplicationDataDay_' + chartList[i]];
+                    var drDetail = drDetails;
+                    var drDetailsArr = []
+                    var drDetailsArrMin = []
+                    var drDetailsArrDay = []
 
-            if(localStorage.drDetailsMin != undefined)
-                drDetailsArrMin = JSON.parse(localStorage.drDetailsMin)
+                    if ($.isEmptyObject(drDetail) || drDetail == undefined || drDetail["DR_GRAPH"][chartList[i]].REPLICATION_RATE_1M == undefined ||
+                    drDetail["DR_GRAPH"][chartList[i]].TIMESTAMP == undefined)
+                        return true;
 
-            if(localStorage.drDetailsDay != undefined)
-                drDetailsArrDay = JSON.parse(localStorage.drDetailsDay)
+                    if(localStorage["drDetailsMin_" + chartList[i]] != undefined){
+                        drDetailsArrMin = getFormattedDataFromLocalStorage(JSON.parse(localStorage["drDetailsMin_" + chartList[i]]))
+                    } else {
+                        drDetailsArrMin =  JSON.stringify(convertDataFormat(drDataMin, 'timestamp', 'replicationRate'))
+                        drDetailsArrMin = JSON.parse(drDetailsArrMin)
+                    }
 
+                    if(localStorage["drDetailsDay_" + chartList[i]] != undefined){
+                        drDetailsArrDay = getFormattedDataFromLocalStorage(JSON.parse(localStorage["drDetailsDay_" + chartList[i]]))
+                    } else {
+                        drDetailsArrDay =  JSON.stringify(convertDataFormat(drDataDay, 'timestamp', 'replicationRate'))
+                        drDetailsArrDay = JSON.parse(drDetailsArrDay)
+                    }
 
-            if ($.isEmptyObject(drDetail) || drDetail == undefined || drDetail["DR_GRAPH"].REPLICATION_RATE_1M == undefined || drDetail["DR_GRAPH"].TIMESTAMP == undefined)
-                return;
+                    if(localStorage["drDetails_" + chartList[i]] != undefined){
+                        drDetailsArr = getFormattedDataFromLocalStorage(JSON.parse(localStorage["drDetails_" + chartList[i]]))
+                    } else {
+                        drDetailsArr =  JSON.stringify(convertDataFormat(drData, 'timestamp', 'replicationRate'))
+                        drDetailsArr = JSON.parse(drDetailsArr)
+                    }
 
-            if(localStorage.drDetails != undefined)
-                drDetailsArr = JSON.parse(localStorage.drDetails)
+                    if(monitor["drFirstData_" + chartList[i]]){
+                        if(drDetailsArr.length > 0 && !(currentTime.getTime() - (new Date(drDetailsArr[drDetailsArr.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                            drData = []
+                            for(var l = 0; l < drDetailsArr.length; l++){
+                                drData = sliceFirstData(drData, dataView.Seconds);
+                                drData.push({"x": new Date(drDetailsArr[l].timestamp),
+                                    "y": drDetailsArr[l].replicationRate
+                                })
+                            }
+                        }
 
-            if(monitor.drFirstData){
-                for(var i = 0; i< drDetailsArr.length; i++){
-                    sliceFirstData(monitor.drReplicationData, dataView.Seconds);
-                    monitor.drReplicationData.push({"x": new Date(drDetailsArr[i].timestamp),
-                        "y": drDetailsArr[i].replicationRate
-                    })
+                        if(drDetailsArrMin.length > 0 && !(currentTime.getTime() - (new Date(drDetailsArrMin[drDetailsArrMin.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                            drDataMin = []
+                            for(var j = 0; j< drDetailsArrMin.length; j++){
+                                drDataMin = sliceFirstData(drDataMin, dataView.Minutes);
+                                drDataMin.push({"x": new Date(drDetailsArrMin[j].timestamp),
+                                    "y": drDetailsArrMin[j].replicationRate
+                                })
+                            }
+                        }
+
+                        if(drDetailsArrDay.length > 0 && !(currentTime.getTime() - (new Date(drDetailsArrDay[drDetailsArrDay.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                            drDataDay = []
+                            for(var k = 0; k< drDetailsArrDay.length; k++){
+                                drDataDay = sliceFirstData(drDataDay, dataView.Days );
+                                drDataDay.push({"x": new Date(drDetailsArrDay[k].timestamp),
+                                    "y": drDetailsArrDay[k].replicationRate
+                                })
+                            }
+                        }
+                    }
+
+                    var timeStamp = drDetail["DR_GRAPH"][chartList[i]].TIMESTAMP;
+
+                    if (timeStamp >= monitor["drMaxTimeStamp_" + chartList[i]]) {
+                        var plottingPoint = parseFloat(drDetail["DR_GRAPH"][chartList[i]].REPLICATION_RATE_1M).toFixed(1) * 1;
+
+                        if (monitor["drSecCount_" + chartList[i]] >= 6 || monitor["drFirstData_" + chartList[i]]) {
+                            drDataMin = sliceFirstData(drDataMin, dataView.Minutes);
+                            if (timeStamp == monitor["drMaxTimeStamp_" + chartList[i]]) {
+                                drDataMin.push({ "x": new Date(timeStamp), "y": drDataMin[drDataMin.length - 1].y });
+                                drDetailsArrMin = saveLocalStorageInterval(drDetailsArrMin, {"timestamp": new Date(timeStamp), "replicationRate": drDataMin[drDataMin.length - 1].y})
+                            } else {
+                                drDataMin.push({ "x": new Date(timeStamp), "y": plottingPoint });
+                                drDetailsArrMin = saveLocalStorageInterval(drDetailsArrMin, {"timestamp": new Date(timeStamp), "replicationRate": plottingPoint})
+                            }
+                            monitor["drReplicationDataMin_" + chartList[i]] = drDataMin;
+                            monitor["drSecCount_" + chartList[i]] = 0;
+                        }
+                        if (monitor["drMinCount_" + chartList[i]] >= 60 || monitor["drFirstData_" + chartList[i]]) {
+                            drDataDay = sliceFirstData(drDataDay, dataView.Days);
+                            if (timeStamp == monitor["drMaxTimeStamp_" + chartList[i]]) {
+                                drDataDay.push({ "x": new Date(timeStamp), "y": drDataDay[drDataDay.length - 1].y });
+                                drDetailsArrDay = saveLocalStorageInterval(drDetailsArrDay, {"timestamp": new Date(timeStamp), "replicationRate": drDataDay[drDataDay.length - 1].y})
+                            } else {
+                                drDataDay.push({ "x": new Date(timeStamp), "y": plottingPoint });
+                                drDetailsArrDay = saveLocalStorageInterval(drDetailsArrDay, {"timestamp": new Date(timeStamp), "replicationRate": plottingPoint})
+                            }
+                            monitor["drReplicationDataDay_" + chartList[i]] = drDataDay;
+                            monitor["drMinCount_" + chartList[i]] = 0;
+                        }
+                        drData = sliceFirstData(drData, dataView.Seconds);
+                        if (timeStamp == monitor["drMaxTimeStamp_" + chartList[i]]) {
+                            drData.push({ "x": new Date(timeStamp), "y": drData[drData.length - 1].y });
+                            drDetailsArr = saveLocalStorageInterval(drDetailsArr, {"timestamp": new Date(timeStamp), "replicationRate": drData[drData.length - 1].y})
+                        } else {
+                            drData.push({ "x": new Date(timeStamp), "y": plottingPoint });
+                            drDetailsArr = saveLocalStorageInterval(drDetailsArr, {"timestamp": new Date(timeStamp), "replicationRate": plottingPoint})
+                        }
+
+                        localStorage["drDetails_" + chartList[i]] = JSON.stringify(drDetailsArr)
+                        localStorage["drDetailsMin_" + chartList[i]] = JSON.stringify(drDetailsArrMin)
+                        localStorage["drDetailsDay_" + chartList[i]] = JSON.stringify(drDetailsArrDay)
+
+                        monitor["drReplicationData_" + chartList[i]] = drData;
+                        monitor["drFirstData_" + chartList[i]] = false;
+
+                        if (graphView == 'Minutes')
+                            dataDrReplication['dataDrReplication_' + chartList[i]][0]["values"]  = drDataMin;
+                        else if (graphView == 'Days')
+                            dataDrReplication['dataDrReplication_' + chartList[i]][0]["values"]  = drDataDay;
+                        else {
+                            dataDrReplication['dataDrReplication_' + chartList[i]][0]["values"]  = drData;
+                        }
+                        if (currentTab == NavigationTabs.DR && currentViewDr == graphView) {
+                            d3.select("#visualizationDrReplicationRate_" + chartList[i])
+                                .datum(dataDrReplication['dataDrReplication_' + chartList[i]])
+                                .transition().duration(500)
+                                .call(drChartList["ChartDrReplicationRate_" + chartList[i]]);
+                        }
+                    }
+
+                    if (timeStamp > monitor["drMaxTimeStamp_" + chartList[i]])
+                        monitor["drMaxTimeStamp_" + chartList[i]] = timeStamp;
+
+                    monitor['drSecCount_' + chartList[i]]++;
+                    monitor['drMinCount_' + chartList[i]]++;
                 }
-                for(var j = 0; j< drDetailsArrMin.length; j++){
-                    sliceFirstData(monitor.drReplicationDataMin, dataView.Minutes);
-                    monitor.drReplicationDataMin.push({"x": new Date(drDetailsArrMin[j].timestamp),
-                        "y": drDetailsArrMin[j].replicationRate
-                    })
-                }
-
-                for(var k = 0; k< drDetailsArrDay.length; k++){
-                    sliceFirstData(monitor.drReplicationDataDay, dataView.Days );
-                    monitor.drReplicationDataDay.push({"x": new Date(drDetailsArrDay[k].timestamp),
-                        "y": drDetailsArrDay[k].replicationRate
-                    })
-                }
-
             }
 
-            var timeStamp = drDetail["DR_GRAPH"].TIMESTAMP;
-            if (timeStamp >= monitor.drMaxTimeStamp) {
-                var plottingPoint = parseFloat(drDetail["DR_GRAPH"].REPLICATION_RATE_1M).toFixed(1) * 1;
-
-                if (drSecCount >= 6 || monitor.drFirstData) {
-                    drDataMin = sliceFirstData(drDataMin, dataView.Minutes);
-                    if (timeStamp == monitor.drMaxTimeStamp) {
-                        drDataMin.push({ "x": new Date(timeStamp), "y": drDataMin[drDataMin.length - 1].y });
-                        drDetailsArrMin = MonitorGraphUI.saveLocalStorage(drDetailsArrMin, {"timestamp": new Date(timeStamp), "replicationRate": drDataMin[drDataMin.length - 1].y}, MonitorGraphUI.timeUnit.min  )
-                    } else {
-                        drDataMin.push({ "x": new Date(timeStamp), "y": plottingPoint });
-                        drDetailsArrMin = MonitorGraphUI.saveLocalStorage(drDetailsArrMin, {"timestamp": new Date(timeStamp), "replicationRate": plottingPoint}, MonitorGraphUI.timeUnit.min  )
-                    }
-                    MonitorGraphUI.Monitors.drReplicationDataMin = drDataMin;
-                    drSecCount = 0;
-                }
-                if (drMinCount >= 60 || monitor.drFirstData) {
-                    drDataDay = sliceFirstData(drDataDay, dataView.Days);
-                    if (timeStamp == monitor.drMaxTimeStamp) {
-                        drDataDay.push({ "x": new Date(timeStamp), "y": drDataDay[drDataDay.length - 1].y });
-                        drDetailsArrDay = MonitorGraphUI.saveLocalStorage(drDetailsArrDay, {"timestamp": new Date(timeStamp), "replicationRate": drDataDay[drDataDay.length - 1].y}, MonitorGraphUI.timeUnit.day  )
-                    } else {
-                        drDataDay.push({ "x": new Date(timeStamp), "y": plottingPoint });
-                        drDetailsArrDay = MonitorGraphUI.saveLocalStorage(drDetailsArrDay, {"timestamp": new Date(timeStamp), "replicationRate": plottingPoint}, MonitorGraphUI.timeUnit.day  )
-                    }
-                    MonitorGraphUI.Monitors.drReplicationDataDay = drDataDay;
-                    drMinCount = 0;
-                }
-                drData = sliceFirstData(drData, dataView.Seconds);
-                if (timeStamp == monitor.drMaxTimeStamp) {
-                    drData.push({ "x": new Date(timeStamp), "y": drData[drData.length - 1].y });
-                    drDetailsArr = MonitorGraphUI.saveLocalStorage(drDetailsArr, {"timestamp": new Date(timeStamp), "replicationRate": drData[drData.length - 1].y}, MonitorGraphUI.timeUnit.sec  )
-                } else {
-                    drData.push({ "x": new Date(timeStamp), "y": plottingPoint });
-                    drDetailsArr = MonitorGraphUI.saveLocalStorage(drDetailsArr, {"timestamp": new Date(timeStamp), "replicationRate": drData[drData.length - 1].y}, plottingPoint  )
-                }
-
-                localStorage.drDetails = JSON.stringify(drDetailsArr)
-                localStorage.drDetailsMin = JSON.stringify(drDetailsArrMin)
-                localStorage.drDetailsDay = JSON.stringify(drDetailsArrDay)
-
-                MonitorGraphUI.Monitors.drReplicationData = drData;
-                monitor.drFirstData = false;
-
-                if (graphView == 'Minutes')
-                    dataDrReplicationRate[0]["values"] = drDataMin;
-                else if (graphView == 'Days')
-                    dataDrReplicationRate[0]["values"] = drDataDay;
-                else {
-                    dataDrReplicationRate[0]["values"] = drData;
-
-                }
-
-                if (currentTab == NavigationTabs.DBMonitor && currentView == graphView && drReplicationChart.is(":visible")) {
-                    d3.select('#visualizationDrReplicationRate')
-                        .datum(dataDrReplicationRate)
-                        .transition().duration(500)
-                        .call(MonitorGraphUI.ChartDrReplicationRate);
-                }
-            }
-            if (timeStamp > monitor.drMaxTimeStamp)
-                monitor.drMaxTimeStamp = timeStamp;
-            drSecCount++;
-            drMinCount++;
         };
 
         this.RefreshCommandLog = function (cmdLogDetails, currentServer, graphView, currentTab) {
-            var monitor = MonitorGraphUI.Monitors;
+            var monitor = Monitors;
             var cmdLogData = monitor.cmdLogData;
             var cmdLogDataMin = monitor.cmdLogDataMin;
             var cmdLogDataDay = monitor.cmdLogDataDay;
@@ -1812,56 +2062,85 @@
             var cmdLogArrMin = []
             var cmdLogArrDay = []
             var overlayDataArr = []
+            var overlayDataArrMin = []
+            var overlayDataArrDay = []
 
             if(localStorage.cmdLogMin != undefined)
-                cmdLogArrMin = JSON.parse(localStorage.cmdLogMin)
+                cmdLogArrMin = getFormattedDataFromLocalStorage(JSON.parse(localStorage.cmdLogMin))
             else{
-                cmdLogArrMin =  JSON.stringify(MonitorGraphUI.convertDataFormat(cmdLogDataMin))
+                cmdLogArrMin =  JSON.stringify(convertDataFormat(cmdLogDataMin))
                 cmdLogArrMin = JSON.parse(cmdLogArrMin)
             }
+
             if(localStorage.cmdLogDay != undefined)
-                cmdLogArrDay = JSON.parse(localStorage.cmdLogDay)
+                cmdLogArrDay = getFormattedDataFromLocalStorage(JSON.parse(localStorage.cmdLogDay))
             else {
-                cmdLogArrDay = JSON.stringify(MonitorGraphUI.convertDataFormat(cmdLogDataDay))
+                cmdLogArrDay = JSON.stringify(convertDataFormat(cmdLogDataDay))
                 cmdLogArrDay = JSON.parse(cmdLogArrDay)
             }
 
             if(localStorage.cmdLog != undefined)
-                cmdLogArr = JSON.parse(localStorage.cmdLog)
+                cmdLogArr = getFormattedDataFromLocalStorage(JSON.parse(localStorage.cmdLog))
             else{
-                cmdLogArr =  JSON.stringify(MonitorGraphUI.convertDataFormat(cmdLogData))
+                cmdLogArr =  JSON.stringify(convertDataFormat(cmdLogData))
                 cmdLogArr =  JSON.parse(cmdLogArr)
             }
-
 
             if(localStorage.SnapshotOverlayData != undefined)
                 overlayDataArr =  JSON.parse(localStorage.SnapshotOverlayData)
 
+            if(localStorage.SnapshotOverlayDataMin != undefined)
+                overlayDataArrMin = JSON.parse(localStorage.SnapshotOverlayDataMin)
+
+            if(localStorage.SnapshotOverlayDataDay != undefined)
+                overlayDataArrDay = JSON.parse(localStorage.SnapshotOverlayDataDay)
+
             if(monitor.cmdLogFirstData){
-                if(cmdLogArr.length != 0)
+                if(cmdLogArr.length > 0 && !(currentTime.getTime() - (new Date(cmdLogArr[cmdLogArr.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
                     cmdLogData = []
-                for(var i = 0; i< cmdLogArr.length; i++){
-                    cmdLogData.push({"x": new Date(cmdLogArr[i].timestamp),
-                        "y": cmdLogArr[i].outstandingTxn
-                    })
-                }
-                if(cmdLogArrMin.length != 0)
-                    cmdLogDataMin = []
-                for(var j = 0; j< cmdLogArrMin.length; j++){
-                    cmdLogDataMin.push({"x": new Date(cmdLogArrMin[j].timestamp),
-                        "y": cmdLogArrMin[j].outstandingTxn
-                    })
-                }
-                if(cmdLogArrDay.length != 0)
-                    cmdLogDataDay = []
-                for(var k = 0; k< cmdLogArrDay.length; k++){
-                    cmdLogDataDay.push({"x": new Date(cmdLogArrDay[k].timestamp),
-                        "y": cmdLogArrDay[k].outstandingTxn
-                    })
+                    for(var i = 0; i< cmdLogArr.length; i++){
+                        cmdLogData = sliceFirstData(cmdLogData, dataView.Seconds);
+                        cmdLogData.push({"x": new Date(cmdLogArr[i].timestamp),
+                            "y": cmdLogArr[i].outstandingTxn
+                        })
+                    }
                 }
 
-                if(overlayDataArr.length != 0){
-                    cmdLogOverlay = MonitorGraphUI.SaveSnapshotOverlay(overlayDataArr)
+                if(cmdLogArrMin.length > 0 && !(currentTime.getTime() - (new Date(cmdLogArrMin[cmdLogArrMin.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                    cmdLogDataMin = []
+                    for(var j = 0; j< cmdLogArrMin.length; j++){
+                        cmdLogDataMin = sliceFirstData(cmdLogDataMin, dataView.Minutes);
+                        cmdLogDataMin.push({"x": new Date(cmdLogArrMin[j].timestamp),
+                            "y": cmdLogArrMin[j].outstandingTxn
+                        })
+                    }
+                }
+
+                if(cmdLogArrDay.length > 0 && !(currentTime.getTime() - (new Date(cmdLogArrDay[cmdLogArrDay.length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                    cmdLogDataDay = []
+                    for(var k = 0; k< cmdLogArrDay.length; k++){
+                        cmdLogDataDay = sliceFirstData(cmdLogDataDay, dataView.Days);
+                        cmdLogDataDay.push({"x": new Date(cmdLogArrDay[k].timestamp),
+                            "y": cmdLogArrDay[k].outstandingTxn
+                        })
+                    }
+                }
+                var overlayData = GetSnapshotOverlay(overlayDataArr)
+                if(overlayData.length != 0 && !(currentTime.getTime() - (new Date(overlayData[overlayData.length - 1].endTime)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                    cmdLogOverlay = []
+                    cmdLogOverlay = overlayData
+                }
+
+                var overlayDataMin = GetSnapshotOverlay(overlayDataArrMin)
+                if(overlayDataMin.length != 0 && !(currentTime.getTime() - (new Date(overlayDataMin[overlayDataMin.length - 1].endTime)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                    cmdLogOverlayMin = overlayDataMin
+                    overlayDataMin = []
+                }
+
+                var overlayDataDay = GetSnapshotOverlay(overlayDataArrDay)
+                if(overlayDataDay.length != 0 && !(currentTime.getTime() - (new Date(overlayDataDay[overlayDataDay.length - 1].endTime)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                    cmdLogOverlayDay = overlayDataDay
+                    overlayDataDay = []
                 }
             }
 
@@ -1876,89 +2155,134 @@
                     cmdLogDataMin = sliceFirstData(cmdLogDataMin, dataView.Minutes);
                     if (timeStamp == monitor.cmdLogMaxTimeStamp) {
                         cmdLogDataMin.push({ "x": new Date(timeStamp), "y": cmdLogDataMin[cmdLogDataMin.length - 1].y });
-                        cmdLogArrMin = MonitorGraphUI.saveLocalStorage(cmdLogArrMin, {"timestamp": new Date(timeStamp), "outstandingTxn": cmdLogDataMin[cmdLogDataMin.length - 1].y}, MonitorGraphUI.timeUnit.min  )
+                        cmdLogArrMin = saveLocalStorageInterval(cmdLogArrMin, {"timestamp": new Date(timeStamp), "outstandingTxn": cmdLogDataMin[cmdLogDataMin.length - 1].y})
                     } else {
                         cmdLogDataMin.push({ "x": new Date(timeStamp), "y": outStandingTxn });
-                        cmdLogArrMin = MonitorGraphUI.saveLocalStorage(cmdLogArrMin, {"timestamp": new Date(timeStamp), "outstandingTxn": outStandingTxn}, MonitorGraphUI.timeUnit.min  )
+                        cmdLogArrMin = saveLocalStorageInterval(cmdLogArrMin, {"timestamp": new Date(timeStamp), "outstandingTxn": outStandingTxn})
                     }
-                    MonitorGraphUI.Monitors.cmdLogDataMin = cmdLogDataMin;
+                    Monitors.cmdLogDataMin = cmdLogDataMin;
+
+                    var isDuplicate = false;
+                    if (!$.isEmptyObject(cmdLogDetail[currentServer].SNAPSHOTS)) {
+                        for (var i = 0; i < cmdLogDetail[currentServer].SNAPSHOTS.length; i++) {
+                            isDuplicate = false;
+                            for(var j = 0;j < cmdLogOverlayMin.length;j++){
+                                var x1 = cmdLogOverlayMin[j].startTime;
+                                if (x1 == cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME){
+                                    isDuplicate = true;
+                                    break;
+                                }
+                            }
+                            if (!isDuplicate){
+                                cmdLogOverlayMin.push({ "startTime": cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME, "endTime": cmdLogDetail[currentServer].SNAPSHOTS[i].END_TIME });
+                                overlayDataArrMin.push({ "startTime": cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME, "endTime": cmdLogDetail[currentServer].SNAPSHOTS[i].END_TIME })
+                            }
+                        }
+                        cmdLogOverlayMin = GetSnapshotOverlay(cmdLogOverlayMin, 90)
+                    }
+
+                    localStorage.SnapshotOverlayDataMin = JSON.stringify(GetSnapshotOverlay(overlayDataArrMin))
+                    overlayDataArrMin = []
                     cmdLogSecCount = 0;
                 }
+
                 if (cmdLogMinCount >= 60 || monitor.cmdLogFirstData) {
                     cmdLogDataDay = sliceFirstData(cmdLogDataDay, dataView.Days);
                     if (timeStamp == monitor.cmdLogMaxTimeStamp) {
                         cmdLogDataDay.push({ "x": new Date(timeStamp), "y": cmdLogDataDay[cmdLogDataDay.length - 1].y });
-                        cmdLogArrDay = MonitorGraphUI.saveLocalStorage(cmdLogArrDay, {"timestamp": new Date(timeStamp), "outstandingTxn": cmdLogDataDay[cmdLogDataDay.length - 1].y}, MonitorGraphUI.timeUnit.day  )
+                        cmdLogArrDay = saveLocalStorageInterval(cmdLogArrDay, {"timestamp": new Date(timeStamp), "outstandingTxn": cmdLogDataDay[cmdLogDataDay.length - 1].y})
                     } else {
                         cmdLogDataDay.push({ "x": new Date(timeStamp), "y": outStandingTxn });
-                        cmdLogArrDay = MonitorGraphUI.saveLocalStorage(cmdLogArrDay, {"timestamp": new Date(timeStamp), "outstandingTxn": outStandingTxn}, MonitorGraphUI.timeUnit.day  )
+                        cmdLogArrDay = saveLocalStorageInterval(cmdLogArrDay, {"timestamp": new Date(timeStamp), "outstandingTxn": outStandingTxn})
                     }
-                    MonitorGraphUI.Monitors.cmdLogDataDay = cmdLogDataDay;
+                    Monitors.cmdLogDataDay = cmdLogDataDay;
+
+                    var isDuplicate = false;
+                    if (!$.isEmptyObject(cmdLogDetail[currentServer].SNAPSHOTS)) {
+                        for (var i = 0; i < cmdLogDetail[currentServer].SNAPSHOTS.length; i++) {
+                            isDuplicate = false
+                            for(var j = 0;j < cmdLogOverlayDay.length;j++){
+                                var x1 = cmdLogOverlayDay[j].startTime;
+                                if (x1 == cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME){
+                                    isDuplicate = true;
+                                    break;
+                                }
+                            }
+                            if (!isDuplicate){
+                                cmdLogOverlayDay.push({ "startTime": cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME, "endTime": cmdLogDetail[currentServer].SNAPSHOTS[i].END_TIME });
+                                overlayDataArrDay.push({ "startTime": cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME, "endTime": cmdLogDetail[currentServer].SNAPSHOTS[i].END_TIME })
+                            }
+                        }
+                        cmdLogOverlayDay = GetSnapshotOverlay(cmdLogOverlayDay, 2400)
+                    }
+                    localStorage.SnapshotOverlayDataDay = JSON.stringify(GetSnapshotOverlay(overlayDataArrDay))
+                    overlayDataArrDay = []
                     cmdLogMinCount = 0;
                 }
                 cmdLogData = sliceFirstData(cmdLogData, dataView.Seconds);
                 if (timeStamp == monitor.cmdLogMaxTimeStamp) {
                     cmdLogData.push({ "x": new Date(timeStamp), "y": cmdLogData[cmdLogData.length - 1].y });
-                    cmdLogArr = MonitorGraphUI.saveLocalStorage(cmdLogArr, {"timestamp": new Date(timeStamp), "outstandingTxn": cmdLogData[cmdLogData.length - 1].y}, MonitorGraphUI.timeUnit.sec  )
+                    cmdLogArr = saveLocalStorageInterval(cmdLogArr, {"timestamp": new Date(timeStamp), "outstandingTxn": cmdLogData[cmdLogData.length - 1].y})
 
                 } else {
                     cmdLogData.push({ "x": new Date(timeStamp), "y": outStandingTxn });
-                    cmdLogArr = MonitorGraphUI.saveLocalStorage(cmdLogArr, {"timestamp": new Date(timeStamp), "outstandingTxn": outStandingTxn}, MonitorGraphUI.timeUnit.sec  )
+                    cmdLogArr = saveLocalStorageInterval(cmdLogArr, {"timestamp": new Date(timeStamp), "outstandingTxn": outStandingTxn})
                 }
-                MonitorGraphUI.Monitors.cmdLogData = cmdLogData;
+                Monitors.cmdLogData = cmdLogData;
 
                 localStorage.cmdLog = JSON.stringify(cmdLogArr)
                 localStorage.cmdLogMin = JSON.stringify(cmdLogArrMin)
                 localStorage.cmdLogDay = JSON.stringify(cmdLogArrDay)
+
+                var isDuplicate = false;
+                if (!$.isEmptyObject(cmdLogDetail[currentServer].SNAPSHOTS)) {
+                    for (var i = 0; i < cmdLogDetail[currentServer].SNAPSHOTS.length; i++) {
+                        isDuplicate = false;
+                        for(var j = 0;j < cmdLogOverlay.length;j++){
+                            var x1 = cmdLogOverlay[j].startTime;
+                            if (x1 == cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME){
+                                isDuplicate = true;
+                                break;
+                            }
+                        }
+                        if (!isDuplicate){
+                            cmdLogOverlay.push({ "startTime": cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME, "endTime": cmdLogDetail[currentServer].SNAPSHOTS[i].END_TIME });
+                            overlayDataArr.push({ "startTime": cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME, "endTime": cmdLogDetail[currentServer].SNAPSHOTS[i].END_TIME });
+                        }
+                    }
+                    cmdLogOverlay = GetSnapshotOverlay(cmdLogOverlay, 15)
+                }
+                localStorage.SnapshotOverlayData = JSON.stringify(GetSnapshotOverlay(overlayDataArr))
 
                 if (monitor.cmdLogFirstData) {
                     $(".cmdLogLegend").css("display", "block");
                 }
                 monitor.cmdLogFirstData = false;
 
-                if (graphView == 'Minutes')
+                dataOverlay = [];
+                if (graphView == 'Minutes'){
                     dataCommandLog[0]["values"] = cmdLogDataMin;
-                else if (graphView == 'Days')
+                    dataOverlay = cmdLogOverlayMin;
+                } else if (graphView == 'Days'){
                     dataCommandLog[0]["values"] = cmdLogDataDay;
-                else {
+                    dataOverlay = cmdLogOverlayDay;
+                } else {
                     dataCommandLog[0]["values"] = cmdLogData;
+                    dataOverlay = cmdLogOverlay;
                 }
 
                 if (currentTab == NavigationTabs.DBMonitor && currentView == graphView && cmdLogChart.is(":visible")) {
                     d3.select('#visualisationCommandLog')
                         .datum(dataCommandLog)
                         .transition().duration(500)
-                        .call(MonitorGraphUI.ChartCommandlog);
+                        .call(ChartCommandlog);
                 }
 
-                var isDuplicate = false;
-                if (!$.isEmptyObject(cmdLogDetail[currentServer].SNAPSHOTS)) {
-                    for (var i = 0; i < cmdLogDetail[currentServer].SNAPSHOTS.length; i++) {
-                        $.each(cmdLogOverlay, function(partitionKey, partitionValue) {
-                            var x1 = partitionValue.x;
-                            if (x1 == cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME)
-                                isDuplicate = true;
-                            else
-                                isDuplicate = false;
-                        });
-                        if (!isDuplicate)
-                            cmdLogOverlay.push({ "startTime": cmdLogDetail[currentServer].SNAPSHOTS[i].START_TIME, "endTime": cmdLogDetail[currentServer].SNAPSHOTS[i].END_TIME });
-                    }
-                }
-                d3.select('#visualisationCommandLog .nv-y')
-                    .append('rect')
-                    .attr('x', 2)
-                    .attr('width', 560)
-                    .style('fill', 'white')
-                    .style('opacity', 1)
-                    .attr('y', 0)
-                    .attr('height', MonitorGraphUI.ChartCommandlog.yAxis.range()[0]);
+                $('.overlayGraph').detach()
 
-                localStorage.SnapshotOverlayData = JSON.stringify(MonitorGraphUI.SaveSnapshotOverlay(cmdLogOverlay))
-
-                $.each(cmdLogOverlay, function(partitionKey, partitionValue) {
-                    var x1 = MonitorGraphUI.ChartCommandlog.xScale()(partitionValue.startTime);
-                    var x2 = MonitorGraphUI.ChartCommandlog.xScale()(partitionValue.endTime);
+                for(var i = 0; i < dataOverlay.length; i++){
+                    var x1 = ChartCommandlog.xScale()(dataOverlay[i].startTime);
+                    var x2 = ChartCommandlog.xScale()(dataOverlay[i].endTime);
                     var opacity = 1;
                     if (x1 > 3 && x1 < 560 && (x2 - x1 > 0)) {
                         opacity = ((x2 - x1) > 4) ? 0.2 : 1;
@@ -1969,11 +2293,10 @@
                             .style('fill', 'red')
                             .style('opacity', opacity)
                             .attr('y', 0)
-                            .attr('height', MonitorGraphUI.ChartCommandlog.yAxis.range()[0]);
+                            .attr('class', 'overlayGraph')
+                            .attr('height', ChartCommandlog.yAxis.range()[0]);
                     }
-
-                });
-
+                }
             }
             if (timeStamp > monitor.cmdLogMaxTimeStamp) {
                 monitor.cmdLogMaxTimeStamp = timeStamp;
@@ -1982,31 +2305,34 @@
             cmdLogMinCount++;
         };
 
-        this.convertDataFormat = function(cmdLogData){
+        var convertDataFormat = function(rawData, key1, key2){
             var requiredFormat = []
-            for(var i = 0; i < cmdLogData.length; i++){
-                requiredFormat.push({"timestamp": cmdLogData[i].x, "outstandingTxn": cmdLogData[i].y})
+            for(var i = 0; i < rawData.length; i++){
+                var newObj = {};
+                newObj[key1] = rawData[i].x;
+                newObj[key2] = rawData[i].y;
+                requiredFormat.push(newObj)
             }
             return requiredFormat;
         }
 
-        this.convertDataFormatForMemory = function(memoryData){
+        var convertDataFormatForPartition = function(partitionData){
             var requiredFormat = []
-            for(var i = 0; i < memoryData.length; i++){
-                requiredFormat.push({"timestamp": memoryData[i].x, "physicalMemory": memoryData[i].y})
+            for(var i = 0; i < partitionData.length; i++){
+                requiredFormat.push({"key": partitionData[i].key, "values": partitionData[i].values, "color": partitionData[i].color})
             }
             return requiredFormat;
         }
 
-        this.SaveSnapshotOverlay = function(snapshotData, timeUnit){
+        var GetSnapshotOverlay = function(snapshotData, timeInterval){
             var interval_end = new Date()
             var interval_start = new Date()
-            var interval = $( "#slider-range-min" ).slider( "value" )
+            var interval = timeInterval == undefined ? RETAINED_TIME_INTERVAL : timeInterval;
             interval_end.setMinutes(interval_end.getMinutes() - interval);
-            snapshotDataArr = [];
+            var snapshotDataArr = [];
             for(var i = 0; i < snapshotData.length; i++){
-                start_timeStamp =  snapshotData[i].startTime;
-                stop_timeStamp = snapshotData[i].endTime;
+                var start_timeStamp =  snapshotData[i].startTime;
+                var stop_timeStamp = snapshotData[i].endTime;
                 if(start_timeStamp >= interval_end.getTime() && start_timeStamp <= interval_start.getTime()
                 && start_timeStamp >= interval_end.getTime() && start_timeStamp <= interval_start.getTime()){
                     snapshotDataArr.push(snapshotData[i])
@@ -2016,18 +2342,572 @@
         }
 
         this.refreshGraphCmdLog = function () {
-            if ($.isFunction(MonitorGraphUI.ChartCommandlog.update))
-                MonitorGraphUI.ChartCommandlog.update();
+            if ($.isFunction(ChartCommandlog.update))
+                ChartCommandlog.update();
         };
 
         this.refreshGraphDR = function () {
-            if ($.isFunction(MonitorGraphUI.ChartDrReplicationRate.update))
-                MonitorGraphUI.ChartDrReplicationRate.update();
+            var drChartIds = VoltDbUI.drChartList;
+            if(drChartIds.length > 0 && !$.isEmptyObject(drChartList)) {
+                for(var i = 0; i < drChartIds.length; i++){
+                    if ($.isFunction(drChartList['ChartDrReplicationRate_' + drChartIds[i]].update))
+                        drChartList['ChartDrReplicationRate_' + drChartIds[i]].update();
+                }
+            }
         };
+
+        this.RefreshOutTransGraph = function (outTransDetails, graphView, currentTab) {
+            var monitor = Monitors;
+
+            if (monitor.outTransData.length < 1 || monitor.outTransDataMin.length < 1 || monitor.outTransDataDay.length < 1) {
+                getOutTransData();
+            }
+
+            if (dataMapperImporterSec == undefined || $.isEmptyObject(dataMapperImporterSec))
+                return
+
+            if (dataMapperImporterDay == undefined || $.isEmptyObject(dataMapperImporterDay))
+                return
+
+            if (dataMapperImporterMin == undefined || $.isEmptyObject(dataMapperImporterMin))
+                return
+
+            var outTransData = monitor.outTransData;
+            var outTransDataMin = monitor.outTransDataMin;
+            var outTransDataDay = monitor.outTransDataDay;
+            var outTransDetail = outTransDetails;
+            var outTransDetailsArr = [];
+            var outTransDetailsArrMin = [];
+            var outTransDetailsArrDay = [];
+
+            if(localStorage.outTransDetailsMin != undefined && JSON.parse(localStorage.outTransDetailsMin).length == outTransDataMin.length){
+                outTransDetailsArrMin = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.outTransDetailsMin))
+            } else {
+                outTransDetailsArrMin = JSON.stringify(convertDataFormatForPartition(outTransDataMin))
+                outTransDetailsArrMin = JSON.parse(outTransDetailsArrMin)
+            }
+
+            if(localStorage.outTransDetailsDay != undefined  && JSON.parse(localStorage.outTransDetailsDay).length == outTransDataDay.length){
+                outTransDetailsArrDay = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.outTransDetailsDay))
+            } else {
+                outTransDetailsArrDay = JSON.stringify(convertDataFormatForPartition(outTransDataDay))
+                outTransDetailsArrDay = JSON.parse(outTransDetailsArrDay)
+            }
+            if(localStorage.outTransDetails != undefined  && JSON.parse(localStorage.outTransDetails).length == outTransData.length){
+                outTransDetailsArr = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.outTransDetails))
+            } else {
+                outTransDetailsArr = JSON.stringify(convertDataFormatForPartition(outTransData))
+                outTransDetailsArr = JSON.parse(outTransDetailsArr)
+            }
+
+            if(monitor.outTransFirstData){
+                for(var i = 0; i< outTransDetailsArr.length; i++){
+                    var keyIndexSec =  i;
+                    if(outTransDetailsArr[i]["values"].length > 0 && !(currentTime.getTime() - (new Date(outTransDetailsArr[i]["values"][outTransDetailsArr[i]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                        outTransData[keyIndexSec]["values"] = []
+                        for(var b = 0; b < outTransDetailsArr[i]["values"].length; b++){
+                            outTransData[keyIndexSec]["values"] = sliceFirstData(outTransData[keyIndexSec]["values"], dataView.Seconds);
+                            outTransData[keyIndexSec]["values"].push({"x": new Date(outTransDetailsArr[i]["values"][b].x), "y": outTransDetailsArr[i]["values"][b].y})
+                        }
+                    }
+                }
+
+                for(var j = 0; j< outTransDetailsArrMin.length; j++){
+                    var keyIndexMin =  j;
+                    if(outTransDetailsArrMin[j]["values"].length > 0 && !(currentTime.getTime() - (new Date(outTransDetailsArrMin[j]["values"][outTransDetailsArrMin[j]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                        outTransDataMin[keyIndexMin]["values"] = []
+                        for(var a = 0; a < outTransDetailsArrMin[j]["values"].length; a++){
+                            outTransDataMin[keyIndexMin]["values"] = sliceFirstData(outTransDataMin[keyIndexMin]["values"], dataView.Minutes)
+                            outTransDataMin[keyIndexMin]["values"].push({"x": new Date(outTransDetailsArrMin[j]["values"][a].x), "y": outTransDetailsArrMin[j]["values"][a].y})
+                        }
+                    }
+                }
+
+                for(var k = 0; k< outTransDetailsArrDay.length; k++){
+                    var keyIndexDay = k;
+                    if(outTransDetailsArrDay[k]["values"].length > 0 && !(currentTime.getTime() - (new Date(outTransDetailsArrDay[k]["values"][outTransDetailsArrDay[k]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                        outTransDataDay[keyIndexMin]["values"] = []
+                        for(var c = 0; c < outTransDetailsArrDay[k]["values"].length; c++){
+                            outTransDataDay[keyIndexDay]["values"] = sliceFirstData(outTransDataDay[keyIndexDay]["values"], dataView.Days)
+                            outTransDataDay[keyIndexDay]["values"].push({"x": new Date(outTransDetailsArrDay[k]["values"][c].x), "y": outTransDetailsArrDay[k]["values"][c].y})
+                        }
+                    }
+                }
+            }
+
+            if ($.isEmptyObject(outTransDetail) || outTransDetail == undefined ||outTransDetail["TIMESTAMP"] == undefined)
+                return;
+
+            var timeStamp = outTransDetail["TIMESTAMP"];
+            if (timeStamp >= monitor.outTransMaxTimeStamp) {
+                $.each(outTransDetail, function(key, value) {
+                    if(key != "TIMESTAMP"){
+                        var keyValue = key;
+                        var newValue = value;
+
+                        if (outTransSecCount >= 6 || monitor.outTransFirstData) {
+                            if (!outTransDataMin.hasOwnProperty(keyValue)) {
+                                var keyIndex = dataMapperImporterMin[keyValue];
+                                outTransDataMin[keyIndex]["values"] = sliceFirstData(outTransDataMin[keyIndex]["values"], dataView.Minutes);
+                                if (timeStamp == monitor.outTransMaxTimeStamp) {
+                                    outTransDataMin[keyIndex]["values"].push({"x": new Date(timeStamp), "y": outTransDataMin[keyIndex]["values"][outTransDataMin[keyIndex]["values"].length - 1].y });
+                                    outTransDetailsArrMin = savePartitionDataToLocalStorage(outTransDetailsArrMin, {"x": new Date(timeStamp), "y": outTransDataMin[keyIndex]["values"][outTransDataMin[keyIndex]["values"].length - 1].y }, keyIndex)
+                                } else {
+                                    outTransDataMin[keyIndex]["values"].push({ 'x': new Date(timeStamp), 'y': newValue });
+                                    outTransDetailsArrMin = savePartitionDataToLocalStorage(outTransDetailsArrMin, { 'x': new Date(timeStamp), 'y': newValue }, keyIndex)
+                                }
+                                Monitors.outTransDataMin = outTransDataMin;
+                            }
+                        }
+
+                        if (outTransMinCount >= 60 || monitor.outTransFirstData) {
+                            var keyIndexDay = dataMapperImporterDay[keyValue];
+                            outTransDataDay[keyIndexDay]["values"] = sliceFirstData(outTransDataDay[keyIndexDay]["values"], dataView.Days);
+                            if (timeStamp == monitor.outTransMaxTimeStamp) {
+                                outTransDataDay[keyIndexDay]["values"].push({ "x": new Date(timeStamp), "y": outTransDataDay[keyIndexDay]["values"][outTransDataDay[keyIndexDay]["values"].length - 1].y });
+                                outTransDetailsArrDay = savePartitionDataToLocalStorage(outTransDetailsArrDay, { "x": new Date(timeStamp), "y": outTransDataDay[keyIndexDay]["values"][outTransDataDay[keyIndexDay]["values"].length - 1].y }, keyIndexDay)
+                            } else {
+                                outTransDataDay[keyIndexDay]["values"].push({ 'x': new Date(timeStamp), 'y': newValue });
+                                outTransDetailsArrDay = savePartitionDataToLocalStorage(outTransDetailsArrDay, { 'x': new Date(timeStamp), 'y': newValue }, keyIndexDay)
+                            }
+                            Monitors.outTransDataDay = outTransDataDay;
+                        }
+
+                        var keyIndexSec = dataMapperImporterSec[keyValue];
+
+                        outTransData[keyIndexSec]["values"] = sliceFirstData(outTransData[keyIndexSec]["values"], dataView.Seconds);
+                        if (timeStamp == monitor.outTransMaxTimeStamp) {
+                            outTransData[keyIndexSec]["values"].push({"x": new Date(timeStamp), "y": outTransData[keyIndexSec]["values"][outTransData[keyIndexSec]["values"].length - 1].y });
+                            outTransDetailsArr = savePartitionDataToLocalStorage(outTransDetailsArr, {"x": new Date(timeStamp), "y": outTransData[keyIndexSec]["values"][outTransData[keyIndexSec]["values"].length - 1].y }, keyIndexSec)
+                        } else {
+                            outTransData[keyIndexSec].values.push({ 'x': new Date(timeStamp), 'y': newValue });
+                            outTransDetailsArr = savePartitionDataToLocalStorage(outTransDetailsArr, { 'x': new Date(timeStamp), 'y': newValue }, keyIndexSec  )
+                        }
+                        Monitors.outTransData = outTransData;
+                    }
+
+                });
+
+                localStorage.outTransDetails = JSON.stringify(outTransDetailsArr)
+                localStorage.outTransDetailsMin = JSON.stringify(outTransDetailsArrMin)
+                localStorage.outTransDetailsDay = JSON.stringify(outTransDetailsArrDay)
+                if (monitor.outTransFirstData) {
+                    $(".legend").css("display", "block");
+                }
+                monitor.outTransFirstData = false;
+                if (outTransSecCount >= 6)
+                    outTransSecCount = 0;
+                if (outTransMinCount >= 60)
+                    outTransMinCount = 0;
+                if (graphView == 'Minutes')
+                    dataOutTrans = outTransDataMin;
+                else if (graphView == 'Days')
+                    dataOutTrans = outTransDataDay;
+                else {
+                    dataOutTrans = outTransData;
+                }
+
+                if (currentTab == NavigationTabs.Importer && currentViewImporter == graphView) {
+                    d3.select('#visualisationOutTrans')
+                        .datum(dataOutTrans)
+                        .transition().duration(500)
+                        .call(ChartOutTrans);
+                }
+            }
+            if (timeStamp > monitor.outTransMaxTimeStamp)
+                monitor.outTransMaxTimeStamp = timeStamp;
+
+            outTransSecCount++;
+            outTransMinCount++;
+        };
+
+        this.RefreshSuccessRateGraph = function (successDetails, graphView, currentTab) {
+            var monitor = Monitors;
+
+            if (monitor.successRateData.length < 1 || monitor.successRateDataMin.length < 1 || monitor.successRateDataDay.length < 1) {
+                getSuccessRateData();
+            }
+
+            if (dataMapperImporterSec == undefined || $.isEmptyObject(dataMapperImporterSec))
+                return
+
+            if (dataMapperImporterDay == undefined || $.isEmptyObject(dataMapperImporterDay))
+                return
+
+            if (dataMapperImporterMin == undefined || $.isEmptyObject(dataMapperImporterMin))
+                return
+
+            var successRateData = monitor.successRateData;
+            var successRateDataMin = monitor.successRateDataMin;
+            var successRateDataDay = monitor.successRateDataDay;
+            var successRateDetail = successDetails;
+            var successRateDetailsArr = [];
+            var successRateDetailsArrMin = [];
+            var successRageDetailsArrDay = [];
+
+            if(localStorage.successRateDetailsMin != undefined && JSON.parse(localStorage.successRateDetailsMin).length == successRateDataMin.length){
+                successRateDetailsArrMin = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.successRateDetailsMin))
+            } else {
+                successRateDetailsArrMin = JSON.stringify(convertDataFormatForPartition(successRateDataMin))
+                successRateDetailsArrMin = JSON.parse(successRateDetailsArrMin)
+            }
+
+            if(localStorage.successRateDetailsDay != undefined && JSON.parse(localStorage.successRateDetailsDay).length == successRateDataDay.length){
+                successRageDetailsArrDay = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.successRateDetailsDay))
+            } else {
+                successRageDetailsArrDay = JSON.stringify(convertDataFormatForPartition(successRateDataDay))
+                successRageDetailsArrDay = JSON.parse(successRageDetailsArrDay)
+            }
+            if(localStorage.successRateDetails != undefined && JSON.parse(localStorage.successRateDetails).length == successRateData.length){
+                successRateDetailsArr = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.successRateDetails))
+            } else {
+                successRateDetailsArr = JSON.stringify(convertDataFormatForPartition(successRateData))
+                successRateDetailsArr = JSON.parse(successRateDetailsArr)
+            }
+
+            if(monitor.successRateFirstData){
+                for(var i = 0; i< successRateDetailsArr.length; i++){
+                    var keyIndexSec =  i;
+                    if(successRateDetailsArr[i]["values"].length > 0 && !(currentTime.getTime() - (new Date(successRateDetailsArr[i]["values"][successRateDetailsArr[i]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                        successRateData[keyIndexSec]["values"] = []
+                        for(var b = 0; b < successRateDetailsArr[i]["values"].length; b++){
+                            successRateData[keyIndexSec]["values"] = sliceFirstData(successRateData[keyIndexSec]["values"], dataView.Seconds);
+                            successRateData[keyIndexSec]["values"].push({"x": new Date(successRateDetailsArr[i]["values"][b].x), "y": successRateDetailsArr[i]["values"][b].y})
+                        }
+                    }
+                }
+
+                for(var j = 0; j< successRateDetailsArrMin.length; j++){
+                    var keyIndexMin =  j;
+                    if(successRateDetailsArrMin[j]["values"].length > 0 && !(currentTime.getTime() - (new Date(successRateDetailsArrMin[j]["values"][successRateDetailsArrMin[j]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                        successRateDataMin[keyIndexMin]["values"] = []
+                        for(var a = 0; a < successRateDetailsArrMin[j]["values"].length; a++){
+                            successRateDataMin[keyIndexMin]["values"] = sliceFirstData(successRateDataMin[keyIndexMin]["values"], dataView.Minutes)
+                            successRateDataMin[keyIndexMin]["values"].push({"x": new Date(successRateDetailsArrMin[j]["values"][a].x), "y": successRateDetailsArrMin[j]["values"][a].y})
+                        }
+                    }
+                }
+
+                for(var k = 0; k< successRageDetailsArrDay.length; k++){
+                    var keyIndexDay = k;
+                    if(successRageDetailsArrDay[k]["values"].length > 0 && !(currentTime.getTime() - (new Date(successRageDetailsArrDay[k]["values"][successRageDetailsArrDay[k]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                        successRateDataDay[keyIndexMin]["values"] = []
+                        for(var c = 0; c < successRageDetailsArrDay[k]["values"].length; c++){
+                            successRateDataDay[keyIndexDay]["values"] = sliceFirstData(successRateDataDay[keyIndexDay]["values"], dataView.Days)
+                            successRateDataDay[keyIndexDay]["values"].push({"x": new Date(successRageDetailsArrDay[k]["values"][c].x), "y": successRageDetailsArrDay[k]["values"][c].y})
+                        }
+                    }
+                }
+            }
+
+            if ($.isEmptyObject(successRateDetail) || successRateDetail == undefined ||successRateDetail["TIMESTAMP"] == undefined)
+                return;
+
+            var timeStamp = successRateDetail["TIMESTAMP"];
+            if (timeStamp >= monitor.successRateMaxTimeStamp) {
+                $.each(successRateDetail, function(key, value) {
+                    if(key != "TIMESTAMP"){
+                        var keyValue = key;
+                        var newValue = value;
+                        var keyIndex = dataMapperImporterMin[keyValue];
+                        if(!$.isEmptyObject(previousSuccessRate) && previousSuccessRate.hasOwnProperty(keyValue)){
+                            var previousTimeStamp = previousSuccessRate[keyValue].timeStamp;
+                            var previousValue = previousSuccessRate[keyValue].value;
+
+                            var calculatedValue = ((previousValue - newValue)*(-1))/((timeStamp - previousTimeStamp)/1000)
+                            if(calculatedValue == -0)
+                                calculatedValue = 0;
+                            previousSuccessRate[keyValue] = {
+                                                                timeStamp: timeStamp,
+                                                                value: newValue
+                                                            }
+                            if (successRateSecCount >= 6 || monitor.successRateFirstData) {
+                                if (!successRateDataMin.hasOwnProperty(keyValue)) {
+
+                                    successRateDataMin[keyIndex]["values"] = sliceFirstData(successRateDataMin[keyIndex]["values"], dataView.Minutes);
+                                    if (timeStamp == monitor.successRateMaxTimeStamp) {
+                                        successRateDataMin[keyIndex]["values"].push({"x": new Date(timeStamp), "y": successRateDataMin[keyIndex]["values"][successRateDataMin[keyIndex]["values"].length - 1].y });
+                                        successRateDetailsArrMin = savePartitionDataToLocalStorage(successRateDetailsArrMin, {"x": new Date(timeStamp), "y": successRateDataMin[keyIndex]["values"][successRateDataMin[keyIndex]["values"].length - 1].y }, keyIndex)
+                                    } else {
+                                        successRateDataMin[keyIndex]["values"].push({ 'x': new Date(timeStamp), 'y': calculatedValue });
+                                        successRateDetailsArrMin = savePartitionDataToLocalStorage(successRateDetailsArrMin, { 'x': new Date(timeStamp), 'y': calculatedValue }, keyIndex)
+                                    }
+                                    Monitors.successRateDataMin = successRateDataMin;
+                                }
+                            }
+
+                            if (successRateMinCount >= 60 || monitor.successRateFirstData) {
+                                var keyIndexDay = dataMapperImporterDay[keyValue];
+                                successRateDataDay[keyIndexDay]["values"] = sliceFirstData(successRateDataDay[keyIndexDay]["values"], dataView.Days);
+                                if (timeStamp == monitor.successRateMaxTimeStamp) {
+                                    successRateDataDay[keyIndexDay]["values"].push({ "x": new Date(timeStamp), "y": successRateDataDay[keyIndexDay]["values"][successRateDataDay[keyIndexDay]["values"].length - 1].y });
+                                    successRageDetailsArrDay = savePartitionDataToLocalStorage(successRageDetailsArrDay, { "x": new Date(timeStamp), "y": successRateDataDay[keyIndexDay]["values"][successRateDataDay[keyIndexDay]["values"].length - 1].y }, keyIndexDay)
+                                } else {
+                                    successRateDataDay[keyIndexDay]["values"].push({ 'x': new Date(timeStamp), 'y': calculatedValue });
+                                    successRageDetailsArrDay = savePartitionDataToLocalStorage(successRageDetailsArrDay, { 'x': new Date(timeStamp), 'y': calculatedValue }, keyIndexDay)
+                                }
+                                Monitors.successRateDataDay = successRateDataDay;
+                            }
+
+                            var keyIndexSec = dataMapperImporterSec[keyValue];
+
+                            successRateData[keyIndexSec]["values"] = sliceFirstData(successRateData[keyIndexSec]["values"], dataView.Seconds);
+                            if (timeStamp == monitor.successRateMaxTimeStamp) {
+                                successRateData[keyIndexSec]["values"].push({"x": new Date(timeStamp), "y": successRateData[keyIndexSec]["values"][successRateData[keyIndexSec]["values"].length - 1].y });
+                                successRateDetailsArr = savePartitionDataToLocalStorage(successRateDetailsArr, {"x": new Date(timeStamp), "y": successRateData[keyIndexSec]["values"][successRateData[keyIndexSec]["values"].length - 1].y }, keyIndexSec)
+                            } else {
+                                successRateData[keyIndexSec].values.push({ 'x': new Date(timeStamp), 'y': calculatedValue });
+                                successRateDetailsArr = savePartitionDataToLocalStorage(successRateDetailsArr, { 'x': new Date(timeStamp), 'y': calculatedValue }, keyIndexSec  )
+                            }
+                            Monitors.successRateData = successRateData;
+                        } else {
+                             previousSuccessRate[keyValue] = {
+                                                                timeStamp: timeStamp,
+                                                                value: newValue
+                                                            }
+                        }
+                    }
+                });
+
+                localStorage.successRateDetails = JSON.stringify(successRateDetailsArr)
+                localStorage.successRateDetailsMin = JSON.stringify(successRateDetailsArrMin)
+                localStorage.successRateDetailsDay = JSON.stringify(successRageDetailsArrDay)
+                if (monitor.successRateFirstData) {
+                    $(".legend").css("display", "block");
+                }
+                monitor.successRateFirstData = false;
+                if (successRateSecCount >= 6)
+                    successRateSecCount = 0;
+                if (successRateMinCount >= 60)
+                    successRateMinCount = 0;
+
+                if (graphView == 'Minutes')
+                    dataSuccessRate = successRateDataMin;
+                else if (graphView == 'Days')
+                    dataSuccessRate = successRateDataDay;
+                else {
+                    dataSuccessRate = successRateData;
+                }
+
+                if (currentTab == NavigationTabs.Importer && currentViewImporter == graphView) {
+                    d3.select('#visualisationSuccessRate')
+                        .datum(dataSuccessRate)
+                        .transition().duration(500)
+                        .call(ChartSuccessRate);
+                }
+            }
+            if (timeStamp > monitor.successRateMaxTimeStamp)
+                monitor.successRateMaxTimeStamp = timeStamp;
+
+            successRateSecCount++;
+            successRateMinCount++;
+        };
+
+        this.RefreshFailureRateGraph = function (failureDetails, graphView, currentTab) {
+            var monitor = Monitors;
+
+            if (monitor.failureRateData.length < 1 || monitor.failureRateDataMin.length < 1 || monitor.failureRateDataDay.length < 1) {
+                getFailureRateData();
+            }
+
+            if (dataMapperImporterSec == undefined || $.isEmptyObject(dataMapperImporterSec))
+                return
+
+            if (dataMapperImporterDay == undefined || $.isEmptyObject(dataMapperImporterDay))
+                return
+
+            if (dataMapperImporterMin == undefined || $.isEmptyObject(dataMapperImporterMin))
+                return
+
+            var failureRateData = monitor.failureRateData;
+            var failureRateDataMin = monitor.failureRateDataMin;
+            var failureRateDataDay = monitor.failureRateDataDay;
+            var failureRateDetail = failureDetails;
+            var failureRateDetailsArr = [];
+            var failureRateDetailsArrMin = [];
+            var failureRageDetailsArrDay = [];
+
+            if(localStorage.failureRateDetailsMin != undefined && JSON.parse(localStorage.failureRateDetailsMin).length == failureRateDataMin.length){
+                failureRateDetailsArrMin = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.failureRateDetailsMin))
+            } else {
+                failureRateDetailsArrMin = JSON.stringify(convertDataFormatForPartition(failureRateDataMin))
+                failureRateDetailsArrMin = JSON.parse(failureRateDetailsArrMin)
+            }
+
+            if(localStorage.failureRateDetailsDay != undefined  && JSON.parse(localStorage.failureRateDetailsDay).length == failureRateDataDay.length){
+                failureRageDetailsArrDay = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.failureRateDetailsDay))
+            } else {
+                failureRageDetailsArrDay = JSON.stringify(convertDataFormatForPartition(failureRateDataDay))
+                failureRageDetailsArrDay = JSON.parse(failureRageDetailsArrDay)
+            }
+            if(localStorage.failureRateDetails != undefined  && JSON.parse(localStorage.failureRateDetails).length == failureRateData.length){
+                failureRateDetailsArr = getFormattedPartitionDataFromLocalStorage(JSON.parse(localStorage.failureRateDetails))
+            } else {
+                failureRateDetailsArr = JSON.stringify(convertDataFormatForPartition(failureRateData))
+                failureRateDetailsArr = JSON.parse(failureRateDetailsArr)
+            }
+
+            if(monitor.failureRateFirstData){
+                for(var i = 0; i< failureRateDetailsArr.length; i++){
+                    var keyIndexSec =  i;
+                    if(failureRateDetailsArr[i]["values"].length > 0 && !(currentTime.getTime() - (new Date(failureRateDetailsArr[i]["values"][failureRateDetailsArr[i]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.secGraph)){
+                        failureRateData[keyIndexSec]["values"] = []
+                        for(var b = 0; b < failureRateDetailsArr[i]["values"].length; b++){
+                            failureRateData[keyIndexSec]["values"] = sliceFirstData(failureRateData[keyIndexSec]["values"], dataView.Seconds);
+                            failureRateData[keyIndexSec]["values"].push({"x": new Date(failureRateDetailsArr[i]["values"][b].x), "y": failureRateDetailsArr[i]["values"][b].y})
+                        }
+                    }
+                }
+
+                for(var j = 0; j< failureRateDetailsArrMin.length; j++){
+                    var keyIndexMin =  j;
+                    if(failureRateDetailsArrMin[j]["values"].length > 0 && !(currentTime.getTime() - (new Date(failureRateDetailsArrMin[j]["values"][failureRateDetailsArrMin[j]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.minGraph)){
+                        failureRateDataMin[keyIndexMin]["values"] = []
+                        for(var a = 0; a < failureRateDetailsArrMin[j]["values"].length; a++){
+                            failureRateDataMin[keyIndexMin]["values"] = sliceFirstData(failureRateDataMin[keyIndexMin]["values"], dataView.Minutes)
+                            failureRateDataMin[keyIndexMin]["values"].push({"x": new Date(failureRateDetailsArrMin[j]["values"][a].x), "y": failureRateDetailsArrMin[j]["values"][a].y})
+                        }
+                    }
+                }
+
+                for(var k = 0; k< failureRageDetailsArrDay.length; k++){
+                    var keyIndexDay = k;
+                    if(failureRageDetailsArrDay[k]["values"].length > 0 && !(currentTime.getTime() - (new Date(failureRageDetailsArrDay[k]["values"][failureRageDetailsArrDay[k]["values"].length - 1].timestamp)).getTime() > MonitorGraphUI.enumMaxTimeGap.dayGraph)){
+                        failureRateDataDay[keyIndexMin]["values"] = []
+                        for(var c = 0; c < failureRageDetailsArrDay[k]["values"].length; c++){
+                            failureRateDataDay[keyIndexDay]["values"] = sliceFirstData(failureRateDataDay[keyIndexDay]["values"], dataView.Days)
+                            failureRateDataDay[keyIndexDay]["values"].push({"x": new Date(failureRageDetailsArrDay[k]["values"][c].x), "y": failureRageDetailsArrDay[k]["values"][c].y})
+                        }
+                    }
+                }
+            }
+
+            if ($.isEmptyObject(failureRateDetail) || failureRateDetail == undefined ||failureRateDetail["TIMESTAMP"] == undefined)
+                return;
+
+            var timeStamp = failureRateDetail["TIMESTAMP"];
+            if (timeStamp >= monitor.failureRateMaxTimeStamp) {
+                $.each(failureRateDetail, function(key, value) {
+                    if(key != "TIMESTAMP"){
+                        var keyValue = key;
+                        var newValue = value;
+                        var keyIndex = dataMapperImporterMin[keyValue];
+                        if(!$.isEmptyObject(previousFailureRate) && previousFailureRate.hasOwnProperty(keyValue)){
+                            var previousTimeStamp = previousFailureRate[keyValue].timeStamp;
+                            var previousValue = previousFailureRate[keyValue].value;
+
+                            var calculatedValue = ((previousValue - newValue)*(-1))/((timeStamp - previousTimeStamp)/1000)
+                            if(calculatedValue == -0)
+                                calculatedValue = 0;
+
+                            previousFailureRate[keyValue] = {
+                                                                timeStamp: timeStamp,
+                                                                value: newValue
+                                                            }
+                            if (failureRateSecCount >= 6 || monitor.failureRateFirstData) {
+                                if (!failureRateDataMin.hasOwnProperty(keyValue)) {
+
+                                    failureRateDataMin[keyIndex]["values"] = sliceFirstData(failureRateDataMin[keyIndex]["values"], dataView.Minutes);
+                                    if (timeStamp == monitor.failureRateMaxTimeStamp) {
+                                        failureRateDataMin[keyIndex]["values"].push({"x": new Date(timeStamp), "y": failureRateDataMin[keyIndex]["values"][failureRateDataMin[keyIndex]["values"].length - 1].y });
+                                        failureRateDetailsArrMin = savePartitionDataToLocalStorage(failureRateDetailsArrMin, {"x": new Date(timeStamp), "y": failureRateDataMin[keyIndex]["values"][failureRateDataMin[keyIndex]["values"].length - 1].y }, keyIndex)
+                                    } else {
+                                        failureRateDataMin[keyIndex]["values"].push({ 'x': new Date(timeStamp), 'y': calculatedValue });
+                                        failureRateDetailsArrMin = savePartitionDataToLocalStorage(failureRateDetailsArrMin, { 'x': new Date(timeStamp), 'y': calculatedValue }, keyIndex)
+                                    }
+                                    Monitors.failureRateDataMin = failureRateDataMin;
+                                }
+                            }
+
+                            if (failureRateMinCount >= 60 || monitor.failureRateFirstData) {
+                                var keyIndexDay = dataMapperImporterDay[keyValue];
+                                failureRateDataDay[keyIndexDay]["values"] = sliceFirstData(failureRateDataDay[keyIndexDay]["values"], dataView.Days);
+                                if (timeStamp == monitor.failureRateMaxTimeStamp) {
+                                    failureRateDataDay[keyIndexDay]["values"].push({ "x": new Date(timeStamp), "y": failureRateDataDay[keyIndexDay]["values"][failureRateDataDay[keyIndexDay]["values"].length - 1].y });
+                                    failureRageDetailsArrDay = savePartitionDataToLocalStorage(failureRageDetailsArrDay, { "x": new Date(timeStamp), "y": failureRateDataDay[keyIndexDay]["values"][failureRateDataDay[keyIndexDay]["values"].length - 1].y }, keyIndexDay)
+                                } else {
+                                    failureRateDataDay[keyIndexDay]["values"].push({ 'x': new Date(timeStamp), 'y': calculatedValue });
+                                    failureRageDetailsArrDay = savePartitionDataToLocalStorage(failureRageDetailsArrDay, { 'x': new Date(timeStamp), 'y': calculatedValue }, keyIndexDay)
+                                }
+                                Monitors.failureRateDataDay = failureRateDataDay;
+                            }
+
+                            var keyIndexSec = dataMapperImporterSec[keyValue];
+
+                            failureRateData[keyIndexSec]["values"] = sliceFirstData(failureRateData[keyIndexSec]["values"], dataView.Seconds);
+                            if (timeStamp == monitor.failureRateMaxTimeStamp) {
+                                failureRateData[keyIndexSec]["values"].push({"x": new Date(timeStamp), "y": failureRateData[keyIndexSec]["values"][failureRateData[keyIndexSec]["values"].length - 1].y });
+                                failureRateDetailsArr = savePartitionDataToLocalStorage(failureRateDetailsArr, {"x": new Date(timeStamp), "y": failureRateData[keyIndexSec]["values"][failureRateData[keyIndexSec]["values"].length - 1].y }, keyIndexSec)
+                            } else {
+                                failureRateData[keyIndexSec].values.push({ 'x': new Date(timeStamp), 'y': calculatedValue });
+                                failureRateDetailsArr = savePartitionDataToLocalStorage(failureRateDetailsArr, { 'x': new Date(timeStamp), 'y': calculatedValue }, keyIndexSec  )
+                            }
+                            Monitors.failureRateData = failureRateData;
+                        } else {
+                             previousFailureRate[keyValue] = {
+                                                                timeStamp: timeStamp,
+                                                                value: newValue
+                                                            }
+                        }
+                    }
+                });
+
+                localStorage.failureRateDetails = JSON.stringify(failureRateDetailsArr)
+                localStorage.failureRateDetailsMin = JSON.stringify(failureRateDetailsArrMin)
+                localStorage.failureRateDetailsDay = JSON.stringify(failureRageDetailsArrDay)
+                if (monitor.failureRateFirstData) {
+                    $(".legend").css("display", "block");
+                }
+                monitor.failureRateFirstData = false;
+                if (failureRateSecCount >= 6)
+                    failureRateSecCount = 0;
+                if (failureRateMinCount >= 60)
+                    failureRateMinCount = 0;
+
+                if (graphView == 'Minutes')
+                    dataFailureRate = failureRateDataMin;
+                else if (graphView == 'Days')
+                    dataFailureRate = failureRateDataDay;
+                else {
+                    dataFailureRate = failureRateData;
+                }
+
+                if (currentTab == NavigationTabs.Importer && currentViewImporter == graphView) {
+                    d3.select('#visualisationFailureRate')
+                        .datum(dataFailureRate)
+                        .transition().duration(500)
+                        .call(ChartFailureRate);
+                }
+            }
+            if (timeStamp > monitor.failureRateMaxTimeStamp)
+                monitor.failureRateMaxTimeStamp = timeStamp;
+
+            failureRateSecCount++;
+            failureRateMinCount++;
+        };
+
+        function getOutTransData() {
+            var monitor = Monitors;
+            monitor.outTransData = getImportData(emptyData, dataMapperImporterSec);
+            monitor.outTransDataMin = getImportData(emptyDataForMinutes, dataMapperImporterMin);
+            monitor.outTransDataDay = getImportData(emptyDataForDays, dataMapperImporterDay);
+        }
+
+        function getSuccessRateData() {
+            var monitor = Monitors;
+            monitor.successRateData = getImportData(emptyData, dataMapperImporterSec);
+            monitor.successRateDataMin = getImportData(emptyDataForMinutes, dataMapperImporterMin);
+            monitor.successRateDataDay = getImportData(emptyDataForDays, dataMapperImporterDay);
+        }
+
+        function getFailureRateData() {
+            var monitor = Monitors;
+            monitor.failureRateData = getImportData(emptyData, dataMapperImporterSec);
+            monitor.failureRateDataMin = getImportData(emptyDataForMinutes, dataMapperImporterMin);
+            monitor.failureRateDataDay = getImportData(emptyDataForDays, dataMapperImporterDay);
+        }
     });
 
-
-
-    window.MonitorGraphUI = MonitorGraphUI = new IMonitorGraphUI();
+    window.MonitorGraphUI = new IMonitorGraphUI();
 })(window);
 
